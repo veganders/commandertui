@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Callable, Optional
 
 from rich.text import Text
 from textual.app import App, ComposeResult
@@ -42,6 +43,68 @@ def _fmt_price(price: Optional[float], currency: str) -> str:
     return f"{sym}{price:.2f}"
 
 
+# ── Partner logic ─────────────────────────────────────────────────────────────
+
+def partner_mode(card: Card) -> Optional[dict]:
+    """Return a dict describing what second commander this card supports, or None.
+
+    Detection priority per CLAUDE.md:
+      partner_with      → "Partner with" keyword (one specific named card)
+      doctors_companion → "Doctor's companion" keyword or "Time Lord Doctor" type
+      background        → "Choose a background" keyword
+      partner_variant   → "Partner—X" in oracle text (Friends forever, Character select, …)
+      partner           → generic "Partner" keyword
+    """
+    kws = card.keywords
+    oracle = card.oracle_text
+
+    if "Partner with" in kws:
+        m = re.search(r"Partner with ([^(\n]+)", oracle)
+        return {"type": "partner_with", "name": m.group(1).strip() if m else None}
+
+    if "Doctor's companion" in kws:
+        return {"type": "doctors_companion", "role": "companion"}
+
+    if "Time Lord Doctor" in card.type_line:
+        return {"type": "doctors_companion", "role": "doctor"}
+
+    if "Choose a background" in kws:
+        return {"type": "background"}
+
+    m = re.search(r"Partner—([^(]+?)\s*\(", oracle)
+    if m:
+        return {"type": "partner_variant", "mechanic": m.group(1).strip()}
+
+    if "Partner" in kws:
+        return {"type": "partner"}
+
+    return None
+
+
+def _partner_filter(info: dict) -> Callable[[Card], bool]:
+    """Return a Card predicate matching valid partners for the given partner_mode dict."""
+    t = info["type"]
+    if t == "partner":
+        return lambda c: (
+            "Partner" in c.keywords
+            and "Partner with" not in c.keywords
+            and not re.search(r"Partner—", c.oracle_text)
+        )
+    if t == "partner_with":
+        name = info.get("name") or ""
+        return lambda c, _n=name: c.name == _n
+    if t == "partner_variant":
+        tag = "Partner—" + info["mechanic"]
+        return lambda c, _t=tag: _t in c.oracle_text
+    if t == "doctors_companion":
+        if info.get("role") == "doctor":
+            return lambda c: "Doctor's companion" in c.keywords
+        return lambda c: "Time Lord Doctor" in c.type_line
+    if t == "background":
+        return lambda c: "Background" in c.type_line
+    return lambda c: True
+
+
 # ── Data model ─────────────────────────────────────────────────────────────────
 
 @dataclass
@@ -58,6 +121,7 @@ class Deck:
     selected_printings: dict[str, int] = field(default_factory=dict)
 
     def unique_cards(self) -> list[Card]:
+        """Unique cards across all groups, excluding commander/partner."""
         seen: set[str] = set()
         result = []
         for g in self.groups:
@@ -67,12 +131,26 @@ class Deck:
                     seen.add(c.oracle_id)
         return result
 
+    def all_cards(self) -> list[Card]:
+        """Commander + partner + unique group cards, deduped."""
+        seen: set[str] = set()
+        result = []
+        for card in (self.commander, self.partner):
+            if card and card.oracle_id not in seen:
+                result.append(card)
+                seen.add(card.oracle_id)
+        for c in self.unique_cards():
+            if c.oracle_id not in seen:
+                result.append(c)
+                seen.add(c.oracle_id)
+        return result
+
     def card_count(self) -> int:
-        return len(self.unique_cards())
+        return len(self.all_cards())
 
     def mana_curve(self) -> list[int]:
         buckets = [0] * 7
-        for c in self.unique_cards():
+        for c in self.all_cards():
             buckets[min(int(c.cmc), 6)] += 1
         return buckets
 
@@ -89,7 +167,7 @@ class Deck:
     def total_cost(self, currency: str) -> tuple[float, int, int]:
         total = 0.0
         priced = 0
-        cards = self.unique_cards()
+        cards = self.all_cards()
         for card in cards:
             if not card.printings:
                 continue
@@ -271,7 +349,6 @@ class CardDetail(VerticalScroll):
 # Modes for SearchScreen
 _MODE_COMMANDER = "commander"
 _MODE_PARTNER = "partner"
-_MODE_BACKGROUND = "background"
 _MODE_GROUP = "group"
 
 
@@ -313,6 +390,8 @@ class SearchScreen(Screen[None]):
         settings: Settings,
         mode: str,
         group: Optional[Group] = None,
+        post_filter: Optional[Callable[[Card], bool]] = None,
+        title: Optional[str] = None,
     ) -> None:
         super().__init__()
         self._db = db
@@ -320,6 +399,8 @@ class SearchScreen(Screen[None]):
         self._settings = settings
         self._mode = mode
         self._group = group
+        self._post_filter = post_filter
+        self._title = title
         self._results: list[Card] = []
         self._current_card: Optional[Card] = None
         self._search_timer = None
@@ -332,12 +413,14 @@ class SearchScreen(Screen[None]):
             yield CardDetail()
 
     def _placeholder(self) -> str:
-        base = {
-            _MODE_COMMANDER: "Search for a commander",
-            _MODE_PARTNER: "Search for a partner / background",
-            _MODE_BACKGROUND: "Search for a background",
-            _MODE_GROUP: f"Add cards to '{self._group.name}'" if self._group else "Search cards",
-        }.get(self._mode, "Search cards")
+        if self._title:
+            base = self._title
+        else:
+            base = {
+                _MODE_COMMANDER: "Search for a commander",
+                _MODE_PARTNER: "Search for a partner",
+                _MODE_GROUP: f"Add cards to '{self._group.name}'" if self._group else "Search cards",
+            }.get(self._mode, "Search cards")
         return base + "  —  t:type  o:oracle  ci:wubrg  tag:ramp  cmc>=3"
 
     def on_mount(self) -> None:
@@ -387,24 +470,21 @@ class SearchScreen(Screen[None]):
                 )
                 or "can be your commander" in c.oracle_text.lower()
             ]
-        elif self._mode == _MODE_PARTNER:
-            results = [
-                c for c in results
-                if "Partner" in c.keywords
-                or "Friends forever" in c.keywords
-                or "Choose a Background" in c.oracle_text
-            ]
-        elif self._mode == _MODE_BACKGROUND:
-            results = [c for c in results if "Background" in c.type_line]
+        elif self._mode == _MODE_PARTNER and self._post_filter is not None:
+            results = [c for c in results if self._post_filter(c)]
 
         self._results = results[:300]
         self._rebuild_list(restore_index=False)
 
     def _implied_node(self) -> Optional[Atom]:
-        if self._mode == _MODE_GROUP and self._deck.commander:
-            ci = self._deck.commander.color_identity
+        if self._mode == _MODE_GROUP:
+            ci: set[str] = set()
+            if self._deck.commander:
+                ci.update(self._deck.commander.color_identity)
+            if self._deck.partner:
+                ci.update(self._deck.partner.color_identity)
             if ci:
-                return Atom(key="ci", value="".join(ci))
+                return Atom(key="ci", value="".join(sorted(ci)))
         return None
 
     def _rebuild_list(self, restore_index: bool = True) -> None:
@@ -425,7 +505,7 @@ class SearchScreen(Screen[None]):
     def _card_count(self, card: Card) -> int:
         if self._mode == _MODE_COMMANDER:
             return 1 if self._deck.commander and self._deck.commander.oracle_id == card.oracle_id else 0
-        if self._mode in (_MODE_PARTNER, _MODE_BACKGROUND):
+        if self._mode == _MODE_PARTNER:
             return 1 if self._deck.partner and self._deck.partner.oracle_id == card.oracle_id else 0
         if self._mode == _MODE_GROUP and self._group is not None:
             return sum(1 for c in self._group.cards if c.oracle_id == card.oracle_id)
@@ -441,11 +521,18 @@ class SearchScreen(Screen[None]):
             return
         card = self._current_card
         if self._mode == _MODE_COMMANDER:
-            self._deck.commander = (
+            new_cmd = (
                 None if self._deck.commander and self._deck.commander.oracle_id == card.oracle_id
                 else card
             )
-        elif self._mode in (_MODE_PARTNER, _MODE_BACKGROUND):
+            self._deck.commander = new_cmd
+            # Clear partner if new commander doesn't support one, or the existing
+            # partner is no longer valid for the new commander's partner type.
+            if self._deck.partner is not None:
+                info = partner_mode(new_cmd) if new_cmd else None
+                if info is None or not _partner_filter(info)(self._deck.partner):
+                    self._deck.partner = None
+        elif self._mode == _MODE_PARTNER:
             self._deck.partner = (
                 None if self._deck.partner and self._deck.partner.oracle_id == card.oracle_id
                 else card
@@ -580,13 +667,22 @@ class DeckbuilderApp(App):
         self._deck.selected_printings[msg.oracle_id] = msg.printing_idx
         self.query_one(TopBar).refresh_display()
 
-    def _push_search(self, mode: str, group: Optional[Group] = None) -> None:
+    def _push_search(
+        self,
+        mode: str,
+        group: Optional[Group] = None,
+        post_filter: Optional[Callable[[Card], bool]] = None,
+        title: Optional[str] = None,
+    ) -> None:
         def on_done(_) -> None:
             self._rebuild_tree()
             self.query_one(TopBar).refresh_display()
 
         self.push_screen(
-            SearchScreen(self._db, self._deck, self._settings, mode, group=group),
+            SearchScreen(
+                self._db, self._deck, self._settings, mode,
+                group=group, post_filter=post_filter, title=title,
+            ),
             callback=on_done,
         )
 
@@ -601,11 +697,54 @@ class DeckbuilderApp(App):
     def action_search_commander(self) -> None:
         self._push_search(_MODE_COMMANDER)
 
+    def check_action(self, action: str, parameters: tuple) -> bool:
+        if action == "search_partner":
+            return (
+                self._deck.commander is not None
+                and partner_mode(self._deck.commander) is not None
+            )
+        return True
+
     def action_search_partner(self) -> None:
-        if self._deck.commander and "Choose a Background" in self._deck.commander.oracle_text:
-            self._push_search(_MODE_BACKGROUND)
-        else:
-            self._push_search(_MODE_PARTNER)
+        commander = self._deck.commander
+        if commander is None:
+            return
+        info = partner_mode(commander)
+        if info is None:
+            return
+
+        # Toggle off if partner already set
+        if self._deck.partner is not None:
+            self._deck.partner = None
+            self.query_one(TopBar).refresh_display()
+            return
+
+        if info["type"] == "partner_with":
+            name = info.get("name") or ""
+            results = self._db.search(name=name)
+            card = next((c for c in results if c.name == name), None)
+            if card:
+                self._deck.partner = card
+                self.query_one(TopBar).refresh_display()
+            else:
+                self.notify(f"Partner not found in database: {name}", severity="warning")
+            return
+
+        titles = {
+            "partner": "Search for a partner (generic Partner)",
+            "partner_variant": f"Search for a Partner—{info.get('mechanic', '')}",
+            "doctors_companion": (
+                "Search for a Doctor's companion"
+                if info.get("role") == "doctor"
+                else "Search for a Doctor (Time Lord)"
+            ),
+            "background": "Search for a background",
+        }
+        self._push_search(
+            _MODE_PARTNER,
+            post_filter=_partner_filter(info),
+            title=titles.get(info["type"]),
+        )
 
 
 if __name__ == "__main__":
