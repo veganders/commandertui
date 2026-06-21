@@ -87,6 +87,8 @@ class Deck:
     def mana_curve(self) -> list[int]:
         buckets = [0] * 7
         for card, count in self.all_entries():
+            if all("Land" in face for face in card.type_line.split(" // ")):
+                continue
             buckets[min(int(card.cmc), 6)] += count
         return buckets
 
