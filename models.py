@@ -1,4 +1,4 @@
-"""Deck data model — Group and Deck dataclasses."""
+"""Deck data model — CardEntry, Group, Deck."""
 
 from __future__ import annotations
 
@@ -9,9 +9,43 @@ from db import Card
 
 
 @dataclass
+class CardEntry:
+    card: Card
+    count: int = 1
+
+
+@dataclass
 class Group:
     name: str
-    cards: list[Card] = field(default_factory=list)
+    cards: list[CardEntry] = field(default_factory=list)
+
+    def find(self, oracle_id: str) -> Optional[CardEntry]:
+        return next((e for e in self.cards if e.card.oracle_id == oracle_id), None)
+
+    def count_of(self, oracle_id: str) -> int:
+        entry = self.find(oracle_id)
+        return entry.count if entry else 0
+
+    def total_count(self) -> int:
+        return sum(e.count for e in self.cards)
+
+    def add(self, card: Card) -> None:
+        entry = self.find(card.oracle_id)
+        if entry is not None:
+            entry.count += 1
+        else:
+            self.cards.append(CardEntry(card=card))
+
+    def remove_one(self, oracle_id: str) -> None:
+        entry = self.find(oracle_id)
+        if entry is None:
+            return
+        entry.count -= 1
+        if entry.count <= 0:
+            self.cards.remove(entry)
+
+    def remove_all(self, oracle_id: str) -> None:
+        self.cards = [e for e in self.cards if e.card.oracle_id != oracle_id]
 
 
 @dataclass
@@ -21,38 +55,39 @@ class Deck:
     groups: list[Group] = field(default_factory=list)
     selected_printings: dict[str, int] = field(default_factory=dict)
 
-    def unique_cards(self) -> list[Card]:
-        """Unique cards across all groups, excluding commander/partner."""
-        seen: set[str] = set()
-        result = []
+    def _group_entries(self) -> list[tuple[Card, int]]:
+        """Total count per card across all groups (deduped by oracle_id)."""
+        totals: dict[str, tuple[Card, int]] = {}
         for g in self.groups:
-            for c in g.cards:
-                if c.oracle_id not in seen:
-                    result.append(c)
-                    seen.add(c.oracle_id)
-        return result
+            for entry in g.cards:
+                oid = entry.card.oracle_id
+                if oid in totals:
+                    totals[oid] = (entry.card, totals[oid][1] + entry.count)
+                else:
+                    totals[oid] = (entry.card, entry.count)
+        return list(totals.values())
 
-    def all_cards(self) -> list[Card]:
-        """Commander + partner + unique group cards, deduped."""
+    def all_entries(self) -> list[tuple[Card, int]]:
+        """Commander + partner (count 1 each) + all group cards, deduped."""
+        result: list[tuple[Card, int]] = []
         seen: set[str] = set()
-        result = []
         for card in (self.commander, self.partner):
             if card and card.oracle_id not in seen:
-                result.append(card)
+                result.append((card, 1))
                 seen.add(card.oracle_id)
-        for c in self.unique_cards():
-            if c.oracle_id not in seen:
-                result.append(c)
-                seen.add(c.oracle_id)
+        for card, count in self._group_entries():
+            if card.oracle_id not in seen:
+                result.append((card, count))
+                seen.add(card.oracle_id)
         return result
 
     def card_count(self) -> int:
-        return len(self.all_cards())
+        return sum(count for _, count in self.all_entries())
 
     def mana_curve(self) -> list[int]:
         buckets = [0] * 7
-        for c in self.all_cards():
-            buckets[min(int(c.cmc), 6)] += 1
+        for card, count in self.all_entries():
+            buckets[min(int(card.cmc), 6)] += count
         return buckets
 
     def get_printing_idx(self, card: Card, currency: str) -> int:
@@ -68,13 +103,14 @@ class Deck:
     def total_cost(self, currency: str) -> tuple[float, int, int]:
         total = 0.0
         priced = 0
-        cards = self.all_cards()
-        for card in cards:
+        all_count = 0
+        for card, count in self.all_entries():
+            all_count += count
             if not card.printings:
                 continue
             idx = self.get_printing_idx(card, currency)
             price = card.printings[idx].prices.get(currency)
             if price is not None:
-                total += price
-                priced += 1
-        return total, priced, len(cards)
+                total += price * count
+                priced += count
+        return total, priced, all_count

@@ -207,7 +207,7 @@ class SearchScreen(Screen[None]):
         if self._mode == MODE_PARTNER:
             return 1 if self._deck.partner and self._deck.partner.oracle_id == card.oracle_id else 0
         if self._mode == MODE_GROUP and self._group is not None:
-            return sum(1 for c in self._group.cards if c.oracle_id == card.oracle_id)
+            return self._group.count_of(card.oracle_id)
         return 0
 
     # ── actions ────────────────────────────────────────────────────────────────
@@ -241,14 +241,10 @@ class SearchScreen(Screen[None]):
                 else card
             )
         elif self._mode == MODE_GROUP and self._group is not None:
-            idx = next(
-                (i for i, c in enumerate(self._group.cards) if c.oracle_id == card.oracle_id),
-                None,
-            )
-            if idx is not None:
-                del self._group.cards[idx]
+            if self._group.count_of(card.oracle_id) > 0:
+                self._group.remove_all(card.oracle_id)
             else:
-                self._group.cards.append(card)
+                self._group.add(card)
         self._refresh_results_for(*changed)
 
     def action_increment_card(self) -> None:
@@ -256,7 +252,7 @@ class SearchScreen(Screen[None]):
             return
         card = self._current_card
         if self._mode == MODE_GROUP and self._group is not None and _allows_multiple(card):
-            self._group.cards.append(card)
+            self._group.add(card)
             self._refresh_results_for(card.oracle_id)
 
     def action_decrement_card(self) -> None:
@@ -264,10 +260,6 @@ class SearchScreen(Screen[None]):
             return
         card = self._current_card
         if self._mode == MODE_GROUP and self._group is not None:
-            idx = next(
-                (i for i, c in enumerate(self._group.cards) if c.oracle_id == card.oracle_id),
-                None,
-            )
-            if idx is not None:
-                del self._group.cards[idx]
+            if self._group.count_of(card.oracle_id) > 0:
+                self._group.remove_one(card.oracle_id)
                 self._refresh_results_for(card.oracle_id)

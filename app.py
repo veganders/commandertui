@@ -63,9 +63,10 @@ class DeckbuilderApp(App):
         tree = self.query_one("#groups", Tree)
         tree.clear()
         for group in self._deck.groups:
-            node = tree.root.add(f"{group.name}  ({len(group.cards)})", expand=True, data=group)
-            for card in group.cards:
-                node.add_leaf(card.name, data=card)
+            node = tree.root.add(f"{group.name}  ({group.total_count()})", expand=True, data=group)
+            for entry in group.cards:
+                label = f"[{entry.count}] {entry.card.name}" if entry.count > 1 else entry.card.name
+                node.add_leaf(label, data=entry.card)
         tree.root.expand()
 
     def _group_for_cursor(self) -> Optional[Group]:
@@ -195,7 +196,7 @@ if __name__ == "__main__":
     ]:
         results = db.search(name=name)
         if results:
-            group.cards.append(results[0])
+            group.add(results[0])
 
     commanders = db.search(name="Atraxa, Praetors' Voice")
     deck = Deck(
