@@ -6,10 +6,12 @@ from typing import Optional
 
 from rich.text import Text
 from textual.app import ComposeResult
+from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.message import Message
+from textual.screen import ModalScreen
 from textual.widget import Widget
-from textual.widgets import Select, Static
+from textual.widgets import Input, Label, Select, Static
 
 from db import Card, CardDB
 from models import Deck
@@ -39,6 +41,41 @@ def fmt_price(price: Optional[float], currency: str) -> str:
         return "N/A"
     sym = CURRENCY_SYMBOLS.get(currency, "")
     return f"{sym}{price:.2f}"
+
+
+# ── GroupNameModal ─────────────────────────────────────────────────────────────
+
+class GroupNameModal(ModalScreen[Optional[str]]):
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    CSS = """
+    GroupNameModal {
+        align: center middle;
+        background: $background 60%;
+    }
+    #modal-box {
+        width: 44;
+        height: auto;
+        background: $surface;
+        border: solid $primary;
+        padding: 1 2;
+    }
+    """
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="modal-box"):
+            yield Label("New group name:")
+            yield Input(id="name-input", placeholder="e.g. Removal")
+
+    def on_mount(self) -> None:
+        self.query_one("#name-input", Input).focus()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        val = event.value.strip()
+        self.dismiss(val if val else None)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
 
 
 # ── TopBar ─────────────────────────────────────────────────────────────────────

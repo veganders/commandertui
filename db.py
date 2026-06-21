@@ -31,6 +31,12 @@ class Card:
     image_uri: Optional[str]
     printings: list["Printing"] = field(default_factory=list)
 
+    def allows_multiple(self) -> bool:
+        return (
+            "Basic" in self.type_line
+            or "a deck can have any number of cards named" in self.oracle_text.lower()
+        )
+
 
 # Price sources present in Scryfall data keyed without finish suffix.
 _PRICE_SOURCES = ("usd", "eur", "tix")

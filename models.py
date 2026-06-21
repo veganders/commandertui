@@ -18,6 +18,7 @@ class CardEntry:
 class Group:
     name: str
     cards: list[CardEntry] = field(default_factory=list)
+    permanent: bool = False
 
     def find(self, oracle_id: str) -> Optional[CardEntry]:
         return next((e for e in self.cards if e.card.oracle_id == oracle_id), None)

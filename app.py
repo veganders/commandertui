@@ -14,7 +14,7 @@ from models import Deck, Group
 from partner import partner_mode, partner_filter
 from search import MODE_COMMANDER, MODE_GROUP, MODE_PARTNER, SearchScreen
 from settings import Settings
-from widgets import CardDetail, TopBar
+from widgets import CardDetail, GroupNameModal, TopBar
 
 
 class DeckbuilderApp(App):
@@ -31,6 +31,27 @@ class DeckbuilderApp(App):
     #groups { width: 1fr; border-right: solid $primary; }
     CardDetail { width: 1fr; padding: 1 2; }
     #cd-printing-label { margin-top: 1; color: $text-muted; }
+
+    Input {
+        border: none;
+        height: 1;
+        padding: 0 1;
+        background: $surface;
+    }
+    Input:focus {
+        border: none;
+        background: $panel;
+    }
+    SelectCurrent {
+        border: none;
+        height: 1;
+        padding: 0 1;
+        background: $surface;
+    }
+    SelectCurrent:focus {
+        border: none;
+        background: $panel;
+    }
     """
 
     BINDINGS = [
@@ -38,6 +59,10 @@ class DeckbuilderApp(App):
         Binding("s", "search_cards", "Search"),
         Binding("c", "search_commander", "Commander"),
         Binding("p", "search_partner", "Partner"),
+        Binding("g", "create_group", "New group"),
+        Binding("d", "delete_node", "Delete"),
+        Binding("+", "increment_card", "+1"),
+        Binding("-", "decrement_card", "-1"),
     ]
 
     def __init__(self, db: CardDB, deck: Deck, settings: Settings) -> None:
@@ -131,6 +156,54 @@ class DeckbuilderApp(App):
 
     def action_search_commander(self) -> None:
         self._push_search(MODE_COMMANDER)
+
+    def action_create_group(self) -> None:
+        def on_name(name: Optional[str]) -> None:
+            if name:
+                self._deck.groups.append(Group(name=name))
+                self._rebuild_tree()
+        self.push_screen(GroupNameModal(), callback=on_name)
+
+    def action_delete_node(self) -> None:
+        node = self.query_one("#groups", Tree).cursor_node
+        if node is None:
+            return
+        if isinstance(node.data, Card):
+            group = self._group_for_cursor()
+            if group is not None:
+                group.remove_all(node.data.oracle_id)
+        elif isinstance(node.data, Group):
+            group = node.data
+            if group.permanent:
+                group.cards.clear()
+            else:
+                self._deck.groups.remove(group)
+        else:
+            return
+        self._rebuild_tree()
+        self.query_one(TopBar).refresh_display()
+
+    def action_increment_card(self) -> None:
+        node = self.query_one("#groups", Tree).cursor_node
+        if node is None or not isinstance(node.data, Card):
+            return
+        group = self._group_for_cursor()
+        if group is None or not node.data.allows_multiple():
+            return
+        group.add(node.data)
+        self._rebuild_tree()
+        self.query_one(TopBar).refresh_display()
+
+    def action_decrement_card(self) -> None:
+        node = self.query_one("#groups", Tree).cursor_node
+        if node is None or not isinstance(node.data, Card):
+            return
+        group = self._group_for_cursor()
+        if group is None:
+            return
+        group.remove_one(node.data.oracle_id)
+        self._rebuild_tree()
+        self.query_one(TopBar).refresh_display()
 
     def check_action(self, action: str, parameters: tuple) -> bool:
         if action == "search_partner":

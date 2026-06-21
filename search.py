@@ -21,12 +21,6 @@ MODE_PARTNER = "partner"
 MODE_GROUP = "group"
 
 
-def _allows_multiple(card: Card) -> bool:
-    return (
-        "Basic" in card.type_line
-        or "any number of cards named" in card.oracle_text.lower()
-    )
-
 
 class SearchScreen(Screen[None]):
     BINDINGS = [
@@ -251,7 +245,7 @@ class SearchScreen(Screen[None]):
         if isinstance(self.focused, Input) or self._current_card is None:
             return
         card = self._current_card
-        if self._mode == MODE_GROUP and self._group is not None and _allows_multiple(card):
+        if self._mode == MODE_GROUP and self._group is not None and card.allows_multiple():
             self._group.add(card)
             self._refresh_results_for(card.oracle_id)
 
