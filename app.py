@@ -7,12 +7,14 @@ from typing import Optional
 
 from rich.text import Text
 from textual.app import App, ComposeResult
+from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.message import Message
+from textual.screen import Screen
 from textual.widget import Widget
-from textual.widgets import Footer, Select, Static, Tree
+from textual.widgets import Footer, Input, Label, ListItem, ListView, Select, Static, Tree
 
-from db import Card, CardDB, load_db
+from db import And, Atom, Card, CardDB, QueryNode, load_db, parse_query
 from settings import Settings
 
 # ── Constants ─────────────────────────────────────────────────────────────────
@@ -264,6 +266,223 @@ class CardDetail(VerticalScroll):
             )
 
 
+# ── Search screen ──────────────────────────────────────────────────────────────
+
+# Modes for SearchScreen
+_MODE_COMMANDER = "commander"
+_MODE_PARTNER = "partner"
+_MODE_BACKGROUND = "background"
+_MODE_GROUP = "group"
+
+
+def _allows_multiple(card: Card) -> bool:
+    return (
+        "Basic" in card.type_line
+        or "any number of cards named" in card.oracle_text.lower()
+    )
+
+
+class SearchScreen(Screen[None]):
+    BINDINGS = [
+        Binding("escape", "dismiss_screen", "Close"),
+        Binding("space", "toggle_card", "Add/Remove"),
+        Binding("+", "increment_card", "+1"),
+        Binding("-", "decrement_card", "-1"),
+    ]
+
+    CSS = """
+    SearchScreen { layout: vertical; background: $background; }
+    #srch-bar {
+        height: 3;
+        padding: 0 1;
+        background: $surface;
+        border-bottom: solid $primary;
+        align: left middle;
+    }
+    #srch-input { width: 1fr; }
+    #srch-bottom { height: 1fr; }
+    #srch-list { width: 1fr; border-right: solid $primary; }
+    SearchScreen CardDetail { width: 1fr; padding: 1 2; }
+    .result-selected { color: $success; }
+    """
+
+    def __init__(
+        self,
+        db: CardDB,
+        deck: Deck,
+        settings: Settings,
+        mode: str,
+        group: Optional[Group] = None,
+    ) -> None:
+        super().__init__()
+        self._db = db
+        self._deck = deck
+        self._settings = settings
+        self._mode = mode
+        self._group = group
+        self._results: list[Card] = []
+        self._current_card: Optional[Card] = None
+        self._search_timer = None
+
+    def compose(self) -> ComposeResult:
+        with Horizontal(id="srch-bar"):
+            yield Input(placeholder=self._placeholder(), id="srch-input")
+        with Horizontal(id="srch-bottom"):
+            yield ListView(id="srch-list")
+            yield CardDetail()
+
+    def _placeholder(self) -> str:
+        base = {
+            _MODE_COMMANDER: "Search for a commander",
+            _MODE_PARTNER: "Search for a partner / background",
+            _MODE_BACKGROUND: "Search for a background",
+            _MODE_GROUP: f"Add cards to '{self._group.name}'" if self._group else "Search cards",
+        }.get(self._mode, "Search cards")
+        return base + "  —  t:type  o:oracle  ci:wubrg  tag:ramp  cmc>=3"
+
+    def on_mount(self) -> None:
+        self._run_search("")
+        self.query_one("#srch-input", Input).focus()
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id != "srch-input":
+            return
+        if self._search_timer is not None:
+            self._search_timer.stop()
+        value = event.value
+        self._search_timer = self.set_timer(1.0, lambda: self._run_search(value))
+
+    def on_key(self, event) -> None:
+        if event.key == "down" and isinstance(self.focused, Input):
+            self.query_one("#srch-list", ListView).focus()
+            event.stop()
+
+    def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
+        if event.list_view.id != "srch-list":
+            return
+        idx = event.list_view.index
+        card = self._results[idx] if idx is not None and 0 <= idx < len(self._results) else None
+        self._current_card = card
+        self.query_one(CardDetail).show_card(card, self._db, self._deck, self._settings)
+
+    def on_card_detail_printing_selected(self, msg: CardDetail.PrintingSelected) -> None:
+        self._deck.selected_printings[msg.oracle_id] = msg.printing_idx
+
+    # ── search logic ────────────────────────────────────────────────────────────
+
+    def _run_search(self, query: str) -> None:
+        node = parse_query(query)
+        implied = self._implied_node()
+        if implied is not None:
+            node = And([implied] + (node.children if isinstance(node, And) else [node]))
+
+        results = self._db.query(node)
+
+        if self._mode == _MODE_COMMANDER:
+            results = [
+                c for c in results
+                if (
+                    "Legendary" in c.type_line
+                    and ("Creature" in c.type_line or "Planeswalker" in c.type_line)
+                )
+                or "can be your commander" in c.oracle_text.lower()
+            ]
+        elif self._mode == _MODE_PARTNER:
+            results = [
+                c for c in results
+                if "Partner" in c.keywords
+                or "Friends forever" in c.keywords
+                or "Choose a Background" in c.oracle_text
+            ]
+        elif self._mode == _MODE_BACKGROUND:
+            results = [c for c in results if "Background" in c.type_line]
+
+        self._results = results[:300]
+        self._rebuild_list(restore_index=False)
+
+    def _implied_node(self) -> Optional[Atom]:
+        if self._mode == _MODE_GROUP and self._deck.commander:
+            ci = self._deck.commander.color_identity
+            if ci:
+                return Atom(key="ci", value="".join(ci))
+        return None
+
+    def _rebuild_list(self, restore_index: bool = True) -> None:
+        lv = self.query_one("#srch-list", ListView)
+        old_idx = lv.index if restore_index else None
+        lv.clear()
+        for card in self._results:
+            count = self._card_count(card)
+            if count:
+                pfx = f"[{count}]" if count > 1 else " [+]"
+                item = ListItem(Label(f"{pfx} {card.name}"), classes="result-selected")
+            else:
+                item = ListItem(Label(f"     {card.name}"))
+            lv.append(item)
+        if old_idx is not None and 0 <= old_idx < len(self._results):
+            lv.index = old_idx
+
+    def _card_count(self, card: Card) -> int:
+        if self._mode == _MODE_COMMANDER:
+            return 1 if self._deck.commander and self._deck.commander.oracle_id == card.oracle_id else 0
+        if self._mode in (_MODE_PARTNER, _MODE_BACKGROUND):
+            return 1 if self._deck.partner and self._deck.partner.oracle_id == card.oracle_id else 0
+        if self._mode == _MODE_GROUP and self._group is not None:
+            return sum(1 for c in self._group.cards if c.oracle_id == card.oracle_id)
+        return 0
+
+    # ── actions ─────────────────────────────────────────────────────────────────
+
+    def action_dismiss_screen(self) -> None:
+        self.dismiss(None)
+
+    def action_toggle_card(self) -> None:
+        if isinstance(self.focused, Input) or self._current_card is None:
+            return
+        card = self._current_card
+        if self._mode == _MODE_COMMANDER:
+            self._deck.commander = (
+                None if self._deck.commander and self._deck.commander.oracle_id == card.oracle_id
+                else card
+            )
+        elif self._mode in (_MODE_PARTNER, _MODE_BACKGROUND):
+            self._deck.partner = (
+                None if self._deck.partner and self._deck.partner.oracle_id == card.oracle_id
+                else card
+            )
+        elif self._mode == _MODE_GROUP and self._group is not None:
+            idx = next(
+                (i for i, c in enumerate(self._group.cards) if c.oracle_id == card.oracle_id),
+                None,
+            )
+            if idx is not None:
+                del self._group.cards[idx]
+            else:
+                self._group.cards.append(card)
+        self._rebuild_list(restore_index=True)
+
+    def action_increment_card(self) -> None:
+        if isinstance(self.focused, Input) or self._current_card is None:
+            return
+        card = self._current_card
+        if self._mode == _MODE_GROUP and self._group is not None and _allows_multiple(card):
+            self._group.cards.append(card)
+            self._rebuild_list(restore_index=True)
+
+    def action_decrement_card(self) -> None:
+        if isinstance(self.focused, Input) or self._current_card is None:
+            return
+        card = self._current_card
+        if self._mode == _MODE_GROUP and self._group is not None:
+            idx = next(
+                (i for i, c in enumerate(self._group.cards) if c.oracle_id == card.oracle_id),
+                None,
+            )
+            if idx is not None:
+                del self._group.cards[idx]
+                self._rebuild_list(restore_index=True)
+
+
 # ── App ────────────────────────────────────────────────────────────────────────
 
 class DeckbuilderApp(App):
@@ -299,7 +518,12 @@ class DeckbuilderApp(App):
     }
     """
 
-    BINDINGS = [("q", "quit", "Quit")]
+    BINDINGS = [
+        Binding("q", "quit", "Quit"),
+        Binding("s", "search_cards", "Search"),
+        Binding("c", "search_commander", "Commander"),
+        Binding("p", "search_partner", "Partner"),
+    ]
 
     def __init__(self, db: CardDB, deck: Deck, settings: Settings) -> None:
         super().__init__()
@@ -322,10 +546,21 @@ class DeckbuilderApp(App):
         tree = self.query_one("#groups", Tree)
         tree.clear()
         for group in self._deck.groups:
-            node = tree.root.add(f"{group.name}  ({len(group.cards)})", expand=True)
+            node = tree.root.add(f"{group.name}  ({len(group.cards)})", expand=True, data=group)
             for card in group.cards:
                 node.add_leaf(card.name, data=card)
         tree.root.expand()
+
+    def _group_for_cursor(self) -> Optional[Group]:
+        node = self.query_one("#groups", Tree).cursor_node
+        if node is None:
+            return None
+        if isinstance(node.data, Group):
+            return node.data
+        if isinstance(node.data, Card) and node.parent is not None:
+            d = node.parent.data
+            return d if isinstance(d, Group) else None
+        return None
 
     def on_tree_node_highlighted(self, event: Tree.NodeHighlighted) -> None:
         card = event.node.data if isinstance(event.node.data, Card) else None
@@ -344,6 +579,33 @@ class DeckbuilderApp(App):
     def on_card_detail_printing_selected(self, msg: CardDetail.PrintingSelected) -> None:
         self._deck.selected_printings[msg.oracle_id] = msg.printing_idx
         self.query_one(TopBar).refresh_display()
+
+    def _push_search(self, mode: str, group: Optional[Group] = None) -> None:
+        def on_done(_) -> None:
+            self._rebuild_tree()
+            self.query_one(TopBar).refresh_display()
+
+        self.push_screen(
+            SearchScreen(self._db, self._deck, self._settings, mode, group=group),
+            callback=on_done,
+        )
+
+    def action_search_cards(self) -> None:
+        group = self._group_for_cursor()
+        if group is None and self._deck.groups:
+            group = self._deck.groups[0]
+        if group is None:
+            return
+        self._push_search(_MODE_GROUP, group=group)
+
+    def action_search_commander(self) -> None:
+        self._push_search(_MODE_COMMANDER)
+
+    def action_search_partner(self) -> None:
+        if self._deck.commander and "Choose a Background" in self._deck.commander.oracle_text:
+            self._push_search(_MODE_BACKGROUND)
+        else:
+            self._push_search(_MODE_PARTNER)
 
 
 if __name__ == "__main__":
