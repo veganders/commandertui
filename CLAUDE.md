@@ -57,3 +57,60 @@ Use this in both the top bar rendering (show/hide the label) and the `action_sea
 4. `"Choose a background" in keywords` → `background`
 5. `re.search(r"Partner—([^(]+)", oracle_text)` → `partner_variant` (extract mechanic name)
 6. `"Partner" in keywords` → `partner`
+
+---
+
+## Data model
+
+### Card
+
+`Card.allows_multiple() -> bool` lives on the `Card` class in `db.py`. It returns True for basic lands (`"Basic" in type_line`) and cards whose oracle text contains `"a deck can have any number of cards named"`. Do not duplicate this check elsewhere.
+
+### Group
+
+```python
+@dataclass
+class CardEntry:
+    card: Card
+    count: int = 1
+
+@dataclass
+class Group:
+    name: str
+    cards: list[CardEntry]   # one entry per oracle_id, count tracks copies
+    permanent: bool = False  # if True, d-key clears cards but never removes the group
+```
+
+Groups expose helpers: `add(card)`, `remove_one(oracle_id)`, `remove_all(oracle_id)`, `count_of(oracle_id) -> int`, `total_count() -> int`. Use these — do not manipulate `group.cards` directly.
+
+### Deck
+
+`Deck.all_entries() -> list[tuple[Card, int]]` returns commander + partner (count 1 each) + all group cards, deduped by oracle_id. `card_count()`, `mana_curve()`, and `total_cost()` all use this so quantities are respected everywhere.
+
+Mana curve excludes cards where every face is a land (`all("Land" in face for face in type_line.split(" // "))`). MDFCs with a non-land face (e.g. `"Sorcery // Land"`) are included.
+
+---
+
+## Key bindings (main window)
+
+| Key | Action |
+|---|---|
+| `c` | Search / set commander |
+| `p` | Search / set partner (hidden when commander has no partner mode) |
+| `s` | Open card search for the current group |
+| `g` | Create a new group (prompts for name via `GroupNameModal`) |
+| `d` | On a card leaf: remove all copies from its group. On a group: delete group and its cards (permanent groups: clear cards only). |
+| `+` | Increment copy count for the focused card (only if `card.allows_multiple()`) |
+| `-` | Decrement copy count for the focused card |
+| `q` | Quit |
+
+---
+
+## CSS conventions
+
+Input fields and Select dropdowns use no border — a background tint signals interactivity instead. The global rules live in `DeckbuilderApp.CSS` and apply to all screens:
+
+- Resting: `background: $surface`, `border: none`, `height: 1`
+- Focused: `background: $panel`, `border: none`
+
+Target `SelectCurrent` (not `Select`) to style the visible trigger of a dropdown.
