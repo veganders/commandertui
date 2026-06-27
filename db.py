@@ -197,9 +197,14 @@ class Or:
     children: list  # list[QueryNode]
 
 
-QueryNode = Union[Atom, And, Or]
+@dataclass
+class Not:
+    child: "QueryNode"
 
-_FILTER_CMP_RE = re.compile(r'^(cmc|mv)([<>]=?|=)(.+)$', re.IGNORECASE)
+
+QueryNode = Union[Atom, And, Or, Not]
+
+_FILTER_CMP_RE = re.compile(r'^(mv|eur|usd|tix)([<>]=?|=)(.+)$', re.IGNORECASE)
 _VALUE_CMP_RE = re.compile(r'^([<>]=?|=)(.+)$')
 _CMP_OPS: dict = {
     '=': float.__eq__, '<': float.__lt__, '>': float.__gt__,
@@ -234,11 +239,13 @@ def _tokenize(query: str) -> list[str]:
     return tokens
 
 
-def _parse_filter(token: str) -> Atom:
+def _parse_filter(token: str) -> QueryNode:
+    if token.startswith('-') and len(token) > 1:
+        return Not(_parse_filter(token[1:]))
     m = _FILTER_CMP_RE.match(token)
     if m:
-        _, op, val = m.groups()
-        return Atom(key='cmc', value=f'{op}{val}')
+        key, op, val = m.groups()
+        return Atom(key=key.lower(), value=f'{op}{val}')
     if ':' in token:
         key, _, rest = token.partition(':')
         if len(rest) >= 2 and rest[0] == '"' and rest[-1] == '"':
@@ -254,10 +261,13 @@ def parse_query(query: str) -> QueryNode:
       bare words         — name substring (implicit AND)
       t:type             — type line substring
       o:"draw a card"    — oracle text substring (quotes allow spaces)
-      c:wubrg / ci:      — color identity subset
-      tag:ramp           — oracle tag substring
+      id:wubrg           — color identity is subset of given colors
+      c:rg               — card colors include at least the given colors
+      otag:ramp          — oracle tag substring
       r:rare             — exact rarity
-      cmc:3 / cmc>=2     — mana value comparison
+      mv:3 / mv>=2       — mana value comparison
+      eur<=1 / usd>=5    — price comparison (cheapest printing)
+      -t:creature        — negate any filter
       AND / OR           — explicit boolean operators
       ( ... )            — grouping; AND has higher precedence than OR
     """
@@ -311,20 +321,33 @@ def _eval_atom(atom: Atom, card: Card, tags: list[str]) -> bool:
             return value.lower() in card.oracle_text.lower()
         case 't' | 'type':
             return value.lower() in card.type_line.lower()
-        case 'c' | 'ci' | 'id':
+        case 'id':
             color_set = {ch.upper() for ch in value if ch.isalpha()}
             return set(card.color_identity) <= color_set
-        case 'tag':
+        case 'c':
+            color_set = {ch.upper() for ch in value if ch.isalpha()}
+            return color_set <= set(card.colors)
+        case 'otag':
             return any(value.lower() in t.lower() for t in tags)
         case 'r' | 'rarity':
             return card.rarity.lower() == value.lower()
-        case 'cmc' | 'mv':
+        case 'mv':
             m = _VALUE_CMP_RE.match(value)
             op, num = (m.group(1), m.group(2)) if m else ('=', value)
             try:
                 return _CMP_OPS.get(op, float.__eq__)(card.cmc, float(num))
             except ValueError:
                 return True
+        case 'eur' | 'usd' | 'tix':
+            m = _VALUE_CMP_RE.match(value)
+            op, num = (m.group(1), m.group(2)) if m else ('=', value)
+            try:
+                threshold = float(num)
+            except ValueError:
+                return True
+            fn = _CMP_OPS.get(op, float.__eq__)
+            prices = [p.prices[key] for p in card.printings if key in p.prices]
+            return bool(prices) and fn(min(prices), threshold)
         case _:
             return value.lower() in card.name.lower()
 
@@ -336,6 +359,8 @@ def _eval_node(node: QueryNode, card: Card, tags: list[str]) -> bool:
         return all(_eval_node(c, card, tags) for c in node.children)
     if isinstance(node, Or):
         return any(_eval_node(c, card, tags) for c in node.children)
+    if isinstance(node, Not):
+        return not _eval_node(node.child, card, tags)
 
 
 def load_db() -> CardDB:
@@ -375,12 +400,32 @@ def load_db() -> CardDB:
     with open(DATA_DIR / "oracle_tags.json") as f:
         raw_tags: list[dict] = json.load(f)
 
+    tag_by_id: dict[str, dict] = {t["id"]: t for t in raw_tags}
+    _memo: dict[str, frozenset] = {}
+
+    def _all_labels(tid: str) -> frozenset:
+        if tid in _memo:
+            return _memo[tid]
+        tag = tag_by_id.get(tid)
+        if not tag:
+            _memo[tid] = frozenset()
+            return _memo[tid]
+        result: frozenset = frozenset({tag["label"]})
+        for pid in tag.get("parent_ids", []):
+            result |= _all_labels(pid)
+        _memo[tid] = result
+        return result
+
+    tag_sets: dict[str, set] = {}
     for tag in raw_tags:
-        label = tag.get("label", "")
+        labels = _all_labels(tag["id"])
         for tagging in tag.get("taggings", []):
             oid = tagging.get("oracle_id")
             if oid and oid in db.cards:
-                db.tags.setdefault(oid, []).append(label)
+                tag_sets.setdefault(oid, set()).update(labels)
+
+    for oid, labels in tag_sets.items():
+        db.tags[oid] = list(labels)
 
     tagged_count = sum(1 for v in db.tags.values() if v)
     print(f"  {tagged_count} cards with oracle tags")

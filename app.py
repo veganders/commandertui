@@ -258,23 +258,13 @@ if __name__ == "__main__":
     db = load_db()
     settings = Settings.load()
 
-    ramp = Group("Ramp")
-    draw = Group("Draw")
-    removal = Group("Removal")
-
-    for name, group in [
-        ("Sol Ring", ramp), ("Arcane Signet", ramp), ("Cultivate", ramp),
-        ("Rhystic Study", draw), ("Mystic Remora", draw), ("Brainstorm", draw),
-        ("Swords to Plowshares", removal), ("Counterspell", removal),
-    ]:
-        results = db.search(name=name)
-        if results:
-            group.add(results[0])
-
-    commanders = db.search(name="Atraxa, Praetors' Voice")
     deck = Deck(
-        commander=commanders[0] if commanders else None,
-        groups=[ramp, draw, removal],
+        groups=[
+            Group("Ramp", permanent=True),
+            Group("Draw", permanent=True),
+            Group("Interaction", permanent=True),
+            Group("Lands", permanent=True),
+        ],
     )
 
     DeckbuilderApp(db, deck, settings).run()

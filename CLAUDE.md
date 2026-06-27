@@ -91,6 +91,53 @@ Mana curve excludes cards where every face is a land (`all("Land" in face for fa
 
 ---
 
+## Oracle tag hierarchy
+
+Tags in `oracle_tags.json` form a parent–child hierarchy via `parent_ids`. During `load_db()` each card's tag set is expanded to include all ancestor labels (e.g. "mana rock" → "mana producer" → "ramp"). This means `otag:ramp` correctly matches mana rocks, mana dorks, land ramp spells, etc. without hardcoding child tag names.
+
+The expansion is done once at load time via a memoised recursive `_all_labels(tag_id)` helper defined inside `load_db()`. The stored `db.tags[oracle_id]` list already contains all ancestor labels.
+
+---
+
+## Search syntax
+
+| Filter | Meaning |
+|---|---|
+| bare word | name substring |
+| `t:type` | type line substring |
+| `o:"text"` | oracle text substring (quotes allow spaces) |
+| `id:wubrg` | color identity is a **subset** of the given colors |
+| `c:rg` | card colors include **at least** red and green |
+| `otag:ramp` | oracle tag substring (matches ancestors — see above) |
+| `r:rare` | exact rarity |
+| `mv>=3` | mana value comparison (`=` `<` `>` `<=` `>=`) |
+| `eur<=1` / `usd>=5` / `tix=0` | price comparison against cheapest printing |
+| `-t:creature` | negate any filter |
+| `AND` / `OR` / `( )` | explicit boolean; AND has higher precedence than OR |
+
+Implied `id:` filter is applied automatically in group-search mode based on the commander + partner color identity.
+
+---
+
+## Auto-routing when adding cards
+
+When a card is toggled or incremented into the deck from the search screen (`space` or `+`), it is automatically routed to the correct permanent group rather than the group that was active when `s` was pressed:
+
+| Condition | Target group |
+|---|---|
+| any face of `type_line` contains `"land"` (case-insensitive) | **Lands** |
+| any oracle tag contains `"ramp"` | **Ramp** |
+| any oracle tag contains `"draw"` | **Draw** |
+| none of the above | fallback to the currently open group |
+
+A card can match multiple conditions and land in multiple groups (e.g. a card tagged both ramp and draw). Lookup is by group name (case-insensitive); if no group named "Lands" / "Ramp" / "Draw" exists, that condition is skipped.
+
+The `+` key on a card already in the deck increments its count in whichever group(s) already hold it, rather than re-routing.
+
+Toggling off (space when card is already in deck) removes the card from **all** groups.
+
+---
+
 ## Key bindings (main window)
 
 | Key | Action |

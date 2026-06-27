@@ -10,7 +10,7 @@ from textual.containers import Horizontal
 from textual.screen import Screen
 from textual.widgets import Input, Label, ListItem, ListView
 
-from db import And, Atom, Card, CardDB, parse_query
+from db import And, Atom, Card, CardDB, Not, parse_query
 from models import Deck, Group
 from partner import partner_mode, partner_filter
 from settings import Settings
@@ -84,7 +84,7 @@ class SearchScreen(Screen[None]):
                 MODE_PARTNER: "Search for a partner",
                 MODE_GROUP: f"Add cards to '{self._group.name}'" if self._group else "Search cards",
             }.get(self._mode, "Search cards")
-        return base + "  —  t:type  o:oracle  ci:wubrg  tag:ramp  cmc>=3"
+        return base + "  —  t:type  o:oracle  id:wubrg  c:rg  otag:ramp  mv>=3  eur<=1  -t:land"
 
     def on_mount(self) -> None:
         self._run_search("")
@@ -98,9 +98,20 @@ class SearchScreen(Screen[None]):
         value = event.value
         self._search_timer = self.set_timer(1.0, lambda: self._run_search(value))
 
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id != "srch-input":
+            return
+        if self._search_timer is not None:
+            self._search_timer.stop()
+            self._search_timer = None
+        self._run_search(event.value)
+
     def on_key(self, event) -> None:
-        if event.key == "down" and isinstance(self.focused, Input):
-            self.query_one("#srch-list", ListView).focus()
+        if event.key in ("down", "tab") and isinstance(self.focused, Input):
+            lv = self.query_one("#srch-list", ListView)
+            lv.focus()
+            if self._results:
+                lv.index = 0
             event.stop()
 
     def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
@@ -147,7 +158,7 @@ class SearchScreen(Screen[None]):
             if self._deck.partner:
                 ci.update(self._deck.partner.color_identity)
             if ci:
-                return Atom(key="ci", value="".join(sorted(ci)))
+                return Atom(key="id", value="".join(sorted(ci)))
         return None
 
     def _rebuild_list(self, restore_index: bool = True) -> None:
@@ -200,9 +211,25 @@ class SearchScreen(Screen[None]):
             return 1 if self._deck.commander and self._deck.commander.oracle_id == card.oracle_id else 0
         if self._mode == MODE_PARTNER:
             return 1 if self._deck.partner and self._deck.partner.oracle_id == card.oracle_id else 0
-        if self._mode == MODE_GROUP and self._group is not None:
-            return self._group.count_of(card.oracle_id)
+        if self._mode == MODE_GROUP:
+            return sum(g.count_of(card.oracle_id) for g in self._deck.groups)
         return 0
+
+    def _route_groups(self, card: Card) -> list[Group]:
+        """Return groups the card should auto-route into based on type/tags."""
+        name_map = {g.name.lower(): g for g in self._deck.groups}
+        tags = {t.lower() for t in self._db.get_tags(card.oracle_id)}
+        targets: list[Group] = []
+
+        if any("land" in face.lower() for face in card.type_line.split(" // ")):
+            if "lands" in name_map:
+                targets.append(name_map["lands"])
+        if any("ramp" in t for t in tags) and "ramp" in name_map:
+            targets.append(name_map["ramp"])
+        if any("draw" in t for t in tags) and "draw" in name_map:
+            targets.append(name_map["draw"])
+
+        return targets
 
     # ── actions ────────────────────────────────────────────────────────────────
 
@@ -234,20 +261,36 @@ class SearchScreen(Screen[None]):
                 None if self._deck.partner and self._deck.partner.oracle_id == card.oracle_id
                 else card
             )
-        elif self._mode == MODE_GROUP and self._group is not None:
-            if self._group.count_of(card.oracle_id) > 0:
-                self._group.remove_all(card.oracle_id)
+        elif self._mode == MODE_GROUP:
+            total = sum(g.count_of(card.oracle_id) for g in self._deck.groups)
+            if total > 0:
+                for g in self._deck.groups:
+                    g.remove_all(card.oracle_id)
             else:
-                self._group.add(card)
+                targets = self._route_groups(card)
+                if not targets and self._group is not None:
+                    targets = [self._group]
+                for g in targets:
+                    g.add(card)
         self._refresh_results_for(*changed)
 
     def action_increment_card(self) -> None:
         if isinstance(self.focused, Input) or self._current_card is None:
             return
         card = self._current_card
-        if self._mode == MODE_GROUP and self._group is not None and card.allows_multiple():
-            self._group.add(card)
-            self._refresh_results_for(card.oracle_id)
+        if self._mode != MODE_GROUP or not card.allows_multiple():
+            return
+        existing = [g for g in self._deck.groups if g.count_of(card.oracle_id) > 0]
+        if existing:
+            for g in existing:
+                g.add(card)
+        else:
+            targets = self._route_groups(card)
+            if not targets and self._group is not None:
+                targets = [self._group]
+            for g in targets:
+                g.add(card)
+        self._refresh_results_for(card.oracle_id)
 
     def action_decrement_card(self) -> None:
         if isinstance(self.focused, Input) or self._current_card is None:
