@@ -138,6 +138,20 @@ Toggling off (space when card is already in deck) removes the card from **all** 
 
 ---
 
+## TODO
+
+### Card group membership editor
+
+Pressing `e` on a card leaf in the main tree should open a modal/screen listing all groups. Each group is shown with an indicator of whether the card is currently a member, and the user can toggle membership the same way cards are toggled in the search screen (space to add/remove). This allows manually correcting auto-routing and adding a card to groups it wouldn't naturally land in (e.g. putting a modal MDFC into both Lands and Interaction).
+
+Implementation notes:
+- Reuse the toggle-in/toggle-out pattern from `SearchScreen` — show a `[+]` or count prefix, toggle on space.
+- `+` / `-` should adjust count for `allows_multiple()` cards, same as in search.
+- The screen receives the `Card` and the `Deck` and operates directly on `deck.groups`.
+- On dismiss, call `_rebuild_tree()` so the tree reflects membership changes.
+
+---
+
 ## Key bindings (main window)
 
 | Key | Action |
