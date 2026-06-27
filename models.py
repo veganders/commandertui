@@ -12,41 +12,22 @@ from db import Card
 class CardEntry:
     card: Card
     count: int = 1
+    groups: set[str] = field(default_factory=set)
+
+    def in_group(self, name: str) -> bool:
+        return name in self.groups
+
+    def join_group(self, name: str) -> None:
+        self.groups.add(name)
+
+    def leave_group(self, name: str) -> None:
+        self.groups.discard(name)
 
 
 @dataclass
 class Group:
     name: str
-    cards: list[CardEntry] = field(default_factory=list)
     permanent: bool = False
-
-    def find(self, oracle_id: str) -> Optional[CardEntry]:
-        return next((e for e in self.cards if e.card.oracle_id == oracle_id), None)
-
-    def count_of(self, oracle_id: str) -> int:
-        entry = self.find(oracle_id)
-        return entry.count if entry else 0
-
-    def total_count(self) -> int:
-        return sum(e.count for e in self.cards)
-
-    def add(self, card: Card) -> None:
-        entry = self.find(card.oracle_id)
-        if entry is not None:
-            entry.count += 1
-        else:
-            self.cards.append(CardEntry(card=card))
-
-    def remove_one(self, oracle_id: str) -> None:
-        entry = self.find(oracle_id)
-        if entry is None:
-            return
-        entry.count -= 1
-        if entry.count <= 0:
-            self.cards.remove(entry)
-
-    def remove_all(self, oracle_id: str) -> None:
-        self.cards = [e for e in self.cards if e.card.oracle_id != oracle_id]
 
 
 @dataclass
@@ -54,32 +35,52 @@ class Deck:
     commander: Optional[Card] = None
     partner: Optional[Card] = None
     groups: list[Group] = field(default_factory=list)
+    entries: dict[str, CardEntry] = field(default_factory=dict)  # oracle_id -> CardEntry
     selected_printings: dict[str, int] = field(default_factory=dict)
 
-    def _group_entries(self) -> list[tuple[Card, int]]:
-        """Total count per card across all groups (deduped by oracle_id)."""
-        totals: dict[str, tuple[Card, int]] = {}
-        for g in self.groups:
-            for entry in g.cards:
-                oid = entry.card.oracle_id
-                if oid in totals:
-                    totals[oid] = (entry.card, totals[oid][1] + entry.count)
-                else:
-                    totals[oid] = (entry.card, entry.count)
-        return list(totals.values())
+    def get_entry(self, oracle_id: str) -> Optional[CardEntry]:
+        return self.entries.get(oracle_id)
+
+    def count_of(self, oracle_id: str) -> int:
+        entry = self.entries.get(oracle_id)
+        return entry.count if entry else 0
+
+    def add(self, card: Card) -> None:
+        if card.oracle_id in self.entries:
+            self.entries[card.oracle_id].count += 1
+        else:
+            self.entries[card.oracle_id] = CardEntry(card=card)
+
+    def remove_one(self, oracle_id: str) -> None:
+        """Decrement count; removes entry (and all group memberships) when count hits 0."""
+        entry = self.entries.get(oracle_id)
+        if entry is None:
+            return
+        entry.count -= 1
+        if entry.count <= 0:
+            del self.entries[oracle_id]
+
+    def remove_all(self, oracle_id: str) -> None:
+        self.entries.pop(oracle_id, None)
+
+    def entries_for_group(self, group_name: str) -> list[CardEntry]:
+        return [e for e in self.entries.values() if group_name in e.groups]
+
+    def uncategorized_entries(self) -> list[CardEntry]:
+        return [e for e in self.entries.values() if not e.groups]
 
     def all_entries(self) -> list[tuple[Card, int]]:
-        """Commander + partner (count 1 each) + all group cards, deduped."""
+        """Commander + partner (count 1 each) + all deck entries."""
         result: list[tuple[Card, int]] = []
         seen: set[str] = set()
         for card in (self.commander, self.partner):
             if card and card.oracle_id not in seen:
                 result.append((card, 1))
                 seen.add(card.oracle_id)
-        for card, count in self._group_entries():
-            if card.oracle_id not in seen:
-                result.append((card, count))
-                seen.add(card.oracle_id)
+        for entry in self.entries.values():
+            if entry.card.oracle_id not in seen:
+                result.append((entry.card, entry.count))
+                seen.add(entry.card.oracle_id)
         return result
 
     def card_count(self) -> int:

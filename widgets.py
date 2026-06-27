@@ -11,10 +11,10 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widget import Widget
-from textual.widgets import Input, Label, Select, Static
+from textual.widgets import Input, Label, ListItem, ListView, Select, Static
 
 from db import Card, CardDB
-from models import Deck
+from models import Deck, Group
 from settings import Settings
 
 # ── Display constants ──────────────────────────────────────────────────────────
@@ -76,6 +76,139 @@ class GroupNameModal(ModalScreen[Optional[str]]):
 
     def action_cancel(self) -> None:
         self.dismiss(None)
+
+
+# ── CardGroupEditorScreen ──────────────────────────────────────────────────────
+
+class CardGroupEditorScreen(ModalScreen[None]):
+    BINDINGS = [
+        Binding("escape", "dismiss_screen", "Close"),
+        Binding("space", "toggle_group", "Add/Remove"),
+        Binding("+", "increment_group", "+1"),
+        Binding("-", "decrement_group", "-1"),
+    ]
+
+    CSS = """
+    CardGroupEditorScreen {
+        align: center middle;
+        background: $background 60%;
+    }
+    #cge-box {
+        width: 52;
+        height: auto;
+        background: $surface;
+        border: solid $primary;
+        padding: 1 2;
+    }
+    #cge-title { margin-bottom: 1; }
+    #cge-list {
+        height: auto;
+        max-height: 15;
+        border: none;
+    }
+    #cge-new-input { margin-top: 1; }
+    .group-member { color: $success; }
+    """
+
+    def __init__(self, card: Card, deck: Deck) -> None:
+        super().__init__()
+        self._card = card
+        self._deck = deck
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="cge-box"):
+            yield Label(f"Groups — {self._card.name}", id="cge-title")
+            yield ListView(id="cge-list")
+            yield Input(placeholder="New group name…", id="cge-new-input")
+
+    def on_mount(self) -> None:
+        self._rebuild_list()
+        self.query_one("#cge-list", ListView).focus()
+
+    def _rebuild_list(self) -> None:
+        entry = self._deck.get_entry(self._card.oracle_id)
+        count = entry.count if entry else 0
+        count_str = f" ×{count}" if count > 1 else ""
+        self.query_one("#cge-title", Label).update(f"Groups — {self._card.name}{count_str}")
+
+        lv = self.query_one("#cge-list", ListView)
+        old_idx = lv.index
+        lv.clear()
+        for group in self._deck.groups:
+            if entry is not None and entry.in_group(group.name):
+                item = ListItem(Label(f" [+] {group.name}"), classes="group-member")
+            else:
+                item = ListItem(Label(f"     {group.name}"))
+            lv.append(item)
+        if old_idx is not None and 0 <= old_idx < len(self._deck.groups):
+            lv.index = old_idx
+
+    def _current_group(self) -> Optional[Group]:
+        lv = self.query_one("#cge-list", ListView)
+        idx = lv.index
+        if idx is None or idx < 0 or idx >= len(self._deck.groups):
+            return None
+        return self._deck.groups[idx]
+
+    def on_key(self, event) -> None:
+        if event.key in ("down", "tab") and isinstance(self.focused, Input):
+            lv = self.query_one("#cge-list", ListView)
+            lv.focus()
+            if self._deck.groups:
+                lv.index = 0
+            event.stop()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        name = event.value.strip()
+        if not name:
+            return
+        existing = {g.name.lower() for g in self._deck.groups}
+        if name.lower() not in existing:
+            self._deck.groups.append(Group(name=name))
+            entry = self._deck.get_entry(self._card.oracle_id)
+            if entry is not None:
+                entry.join_group(name)
+        event.input.value = ""
+        self._rebuild_list()
+        lv = self.query_one("#cge-list", ListView)
+        lv.focus()
+        if name.lower() not in existing:
+            lv.index = len(self._deck.groups) - 1
+
+    def action_dismiss_screen(self) -> None:
+        self.dismiss(None)
+
+    def action_toggle_group(self) -> None:
+        if isinstance(self.focused, Input):
+            return
+        group = self._current_group()
+        if group is None:
+            return
+        entry = self._deck.get_entry(self._card.oracle_id)
+        if entry is None:
+            return
+        if entry.in_group(group.name):
+            entry.leave_group(group.name)
+        else:
+            entry.join_group(group.name)
+        self._rebuild_list()
+
+    def action_increment_group(self) -> None:
+        if isinstance(self.focused, Input) or not self._card.allows_multiple():
+            return
+        if self._deck.get_entry(self._card.oracle_id) is not None:
+            self._deck.add(self._card)
+            self._rebuild_list()
+
+    def action_decrement_group(self) -> None:
+        if isinstance(self.focused, Input):
+            return
+        if self._deck.count_of(self._card.oracle_id) > 0:
+            self._deck.remove_one(self._card.oracle_id)
+            if self._deck.count_of(self._card.oracle_id) == 0:
+                self.dismiss(None)
+            else:
+                self._rebuild_list()
 
 
 # ── TopBar ─────────────────────────────────────────────────────────────────────

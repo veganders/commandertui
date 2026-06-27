@@ -30,12 +30,32 @@ class Card:
     loyalty: Optional[str]
     image_uri: Optional[str]
     printings: list["Printing"] = field(default_factory=list)
+    faces: list[tuple[str, str]] = field(default_factory=list)  # (name, mana_cost) per face
 
     def allows_multiple(self) -> bool:
         return (
             "Basic" in self.type_line
             or "a deck can have any number of cards named" in self.oracle_text.lower()
         )
+
+    def display_label(self, currency: str, printing_idx: int) -> str:
+        """Format: '[3RB] Card Name [EUR: 2.34]', or '[1R] Face 1 // [2U] Face 2 [EUR: 2.34]'."""
+        if self.faces:
+            face_parts: list[str] = []
+            for face_name, face_mana in self.faces:
+                cleaned = re.sub(r'[{}]', '', face_mana) if face_mana else ""
+                face_parts.append(f"[{cleaned}] {face_name}" if cleaned else face_name)
+            name_part = " // ".join(face_parts)
+        else:
+            mana = re.sub(r'[{}]', '', self.mana_cost) if self.mana_cost else ""
+            name_part = f"[{mana}] {self.name}" if mana else self.name
+
+        parts = [name_part]
+        if 0 <= printing_idx < len(self.printings):
+            price = self.printings[printing_idx].prices.get(currency)
+            if price is not None:
+                parts.append(f"[{currency.upper()}: {price:.2f}]")
+        return " ".join(parts)
 
 
 # Price sources present in Scryfall data keyed without finish suffix.
@@ -76,17 +96,24 @@ def _parse_card(raw: dict) -> Optional[Card]:
     layout = raw.get("layout", "normal")
 
     if layout in _SPLIT_LAYOUTS and "card_faces" in raw:
-        faces = raw["card_faces"]
-        oracle_text = " // ".join(f.get("oracle_text", "") for f in faces)
-        mana_cost = faces[0].get("mana_cost", raw.get("mana_cost", ""))
+        raw_faces = raw["card_faces"]
+        oracle_text = " // ".join(f.get("oracle_text", "") for f in raw_faces)
+        mana_cost = raw_faces[0].get("mana_cost", raw.get("mana_cost", ""))
         image_uri = (
-            faces[0].get("image_uris", {}).get("normal")
+            raw_faces[0].get("image_uris", {}).get("normal")
             or raw.get("image_uris", {}).get("normal")
         )
+        # Store per-face data only when multiple faces carry their own mana costs
+        # (split, modal_dfc, adventure). Transform/flip have only one face with a cost.
+        if any(f.get("mana_cost") for f in raw_faces[1:]):
+            faces = [(f.get("name", ""), f.get("mana_cost", "")) for f in raw_faces]
+        else:
+            faces = []
     else:
         oracle_text = raw.get("oracle_text", "")
         mana_cost = raw.get("mana_cost", "")
         image_uri = raw.get("image_uris", {}).get("normal")
+        faces = []
 
     return Card(
         oracle_id=raw["oracle_id"],
@@ -105,6 +132,7 @@ def _parse_card(raw: dict) -> Optional[Card]:
         loyalty=raw.get("loyalty"),
         image_uri=image_uri,
         printings=_extract_printings(raw),
+        faces=faces,
     )
 
 

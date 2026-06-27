@@ -14,7 +14,7 @@ from models import Deck, Group
 from partner import partner_mode, partner_filter
 from search import MODE_COMMANDER, MODE_GROUP, MODE_PARTNER, SearchScreen
 from settings import Settings
-from widgets import CardDetail, GroupNameModal, TopBar
+from widgets import CardDetail, CardGroupEditorScreen, GroupNameModal, TopBar
 
 
 class DeckbuilderApp(App):
@@ -61,6 +61,7 @@ class DeckbuilderApp(App):
         Binding("p", "search_partner", "Partner"),
         Binding("g", "create_group", "New group"),
         Binding("d", "delete_node", "Delete"),
+        Binding("e", "edit_card_groups", "Edit groups"),
         Binding("+", "increment_card", "+1"),
         Binding("-", "decrement_card", "-1"),
     ]
@@ -87,10 +88,22 @@ class DeckbuilderApp(App):
     def _rebuild_tree(self) -> None:
         tree = self.query_one("#groups", Tree)
         tree.clear()
+        currency = self._settings.currency
         for group in self._deck.groups:
-            node = tree.root.add(f"{group.name}  ({group.total_count()})", expand=True, data=group)
-            for entry in group.cards:
-                label = f"[{entry.count}] {entry.card.name}" if entry.count > 1 else entry.card.name
+            entries = self._deck.entries_for_group(group.name)
+            total = sum(e.count for e in entries)
+            node = tree.root.add(f"{group.name}  ({total})", expand=True, data=group)
+            for entry in entries:
+                base = entry.card.display_label(currency, self._deck.get_printing_idx(entry.card, currency))
+                label = f"[{entry.count}] {base}" if entry.count > 1 else base
+                node.add_leaf(label, data=entry.card)
+        uncategorized = self._deck.uncategorized_entries()
+        if uncategorized:
+            total = sum(e.count for e in uncategorized)
+            node = tree.root.add(f"Uncategorized  ({total})", expand=True, data=None)
+            for entry in uncategorized:
+                base = entry.card.display_label(currency, self._deck.get_printing_idx(entry.card, currency))
+                label = f"[{entry.count}] {base}" if entry.count > 1 else base
                 node.add_leaf(label, data=entry.card)
         tree.root.expand()
 
@@ -147,12 +160,7 @@ class DeckbuilderApp(App):
         )
 
     def action_search_cards(self) -> None:
-        group = self._group_for_cursor()
-        if group is None and self._deck.groups:
-            group = self._deck.groups[0]
-        if group is None:
-            return
-        self._push_search(MODE_GROUP, group=group)
+        self._push_search(MODE_GROUP, group=self._group_for_cursor())
 
     def action_search_commander(self) -> None:
         self._push_search(MODE_COMMANDER)
@@ -164,19 +172,28 @@ class DeckbuilderApp(App):
                 self._rebuild_tree()
         self.push_screen(GroupNameModal(), callback=on_name)
 
+    def action_edit_card_groups(self) -> None:
+        node = self.query_one("#groups", Tree).cursor_node
+        if node is None or not isinstance(node.data, Card):
+            return
+
+        def on_done(_) -> None:
+            self._rebuild_tree()
+            self.query_one(TopBar).refresh_display()
+
+        self.push_screen(CardGroupEditorScreen(node.data, self._deck), callback=on_done)
+
     def action_delete_node(self) -> None:
         node = self.query_one("#groups", Tree).cursor_node
         if node is None:
             return
         if isinstance(node.data, Card):
-            group = self._group_for_cursor()
-            if group is not None:
-                group.remove_all(node.data.oracle_id)
+            self._deck.remove_all(node.data.oracle_id)
         elif isinstance(node.data, Group):
             group = node.data
-            if group.permanent:
-                group.cards.clear()
-            else:
+            for entry in self._deck.entries_for_group(group.name):
+                entry.leave_group(group.name)
+            if not group.permanent:
                 self._deck.groups.remove(group)
         else:
             return
@@ -187,10 +204,9 @@ class DeckbuilderApp(App):
         node = self.query_one("#groups", Tree).cursor_node
         if node is None or not isinstance(node.data, Card):
             return
-        group = self._group_for_cursor()
-        if group is None or not node.data.allows_multiple():
+        if not node.data.allows_multiple():
             return
-        group.add(node.data)
+        self._deck.add(node.data)
         self._rebuild_tree()
         self.query_one(TopBar).refresh_display()
 
@@ -198,10 +214,7 @@ class DeckbuilderApp(App):
         node = self.query_one("#groups", Tree).cursor_node
         if node is None or not isinstance(node.data, Card):
             return
-        group = self._group_for_cursor()
-        if group is None:
-            return
-        group.remove_one(node.data.oracle_id)
+        self._deck.remove_one(node.data.oracle_id)
         self._rebuild_tree()
         self.query_one(TopBar).refresh_display()
 
@@ -211,6 +224,9 @@ class DeckbuilderApp(App):
                 self._deck.commander is not None
                 and partner_mode(self._deck.commander) is not None
             )
+        if action == "edit_card_groups":
+            node = self.query_one("#groups", Tree).cursor_node
+            return node is not None and isinstance(node.data, Card)
         return True
 
     def action_search_partner(self) -> None:

@@ -165,13 +165,15 @@ class SearchScreen(Screen[None]):
         lv = self.query_one("#srch-list", ListView)
         old_idx = lv.index if restore_index else None
         lv.clear()
+        currency = self._settings.currency
         for card in self._results:
             count = self._card_count(card)
+            base = card.display_label(currency, self._deck.get_printing_idx(card, currency))
             if count:
                 pfx = f"[{count}]" if count > 1 else " [+]"
-                item = ListItem(Label(f"{pfx} {card.name}"), classes="result-selected")
+                item = ListItem(Label(f"{pfx} {base}"), classes="result-selected")
             else:
-                item = ListItem(Label(f"     {card.name}"))
+                item = ListItem(Label(f"     {base}"))
             lv.append(item)
         if old_idx is not None and 0 <= old_idx < len(self._results):
             lv.index = old_idx
@@ -192,18 +194,20 @@ class SearchScreen(Screen[None]):
             return
         lv = self.query_one("#srch-list", ListView)
         items = list(lv.children)
+        currency = self._settings.currency
         for i, card in changed.items():
             if i >= len(items):
                 continue
             count = self._card_count(card)
+            base = card.display_label(currency, self._deck.get_printing_idx(card, currency))
             item = items[i]
             label = item.query_one(Label)
             if count:
                 pfx = f"[{count}]" if count > 1 else " [+]"
-                label.update(f"{pfx} {card.name}")
+                label.update(f"{pfx} {base}")
                 item.add_class("result-selected")
             else:
-                label.update(f"     {card.name}")
+                label.update(f"     {base}")
                 item.remove_class("result-selected")
 
     def _card_count(self, card: Card) -> int:
@@ -212,7 +216,7 @@ class SearchScreen(Screen[None]):
         if self._mode == MODE_PARTNER:
             return 1 if self._deck.partner and self._deck.partner.oracle_id == card.oracle_id else 0
         if self._mode == MODE_GROUP:
-            return sum(g.count_of(card.oracle_id) for g in self._deck.groups)
+            return self._deck.count_of(card.oracle_id)
         return 0
 
     def _route_groups(self, card: Card) -> list[Group]:
@@ -262,16 +266,17 @@ class SearchScreen(Screen[None]):
                 else card
             )
         elif self._mode == MODE_GROUP:
-            total = sum(g.count_of(card.oracle_id) for g in self._deck.groups)
-            if total > 0:
-                for g in self._deck.groups:
-                    g.remove_all(card.oracle_id)
+            if self._deck.count_of(card.oracle_id) > 0:
+                self._deck.remove_all(card.oracle_id)
             else:
-                targets = self._route_groups(card)
-                if not targets and self._group is not None:
-                    targets = [self._group]
-                for g in targets:
-                    g.add(card)
+                self._deck.add(card)
+                entry = self._deck.get_entry(card.oracle_id)
+                if entry is not None:
+                    targets = self._route_groups(card)
+                    if not targets and self._group is not None:
+                        targets = [self._group]
+                    for g in targets:
+                        entry.join_group(g.name)
         self._refresh_results_for(*changed)
 
     def action_increment_card(self) -> None:
@@ -280,23 +285,24 @@ class SearchScreen(Screen[None]):
         card = self._current_card
         if self._mode != MODE_GROUP or not card.allows_multiple():
             return
-        existing = [g for g in self._deck.groups if g.count_of(card.oracle_id) > 0]
-        if existing:
-            for g in existing:
-                g.add(card)
+        if self._deck.count_of(card.oracle_id) > 0:
+            self._deck.add(card)
         else:
-            targets = self._route_groups(card)
-            if not targets and self._group is not None:
-                targets = [self._group]
-            for g in targets:
-                g.add(card)
+            self._deck.add(card)
+            entry = self._deck.get_entry(card.oracle_id)
+            if entry is not None:
+                targets = self._route_groups(card)
+                if not targets and self._group is not None:
+                    targets = [self._group]
+                for g in targets:
+                    entry.join_group(g.name)
         self._refresh_results_for(card.oracle_id)
 
     def action_decrement_card(self) -> None:
         if isinstance(self.focused, Input) or self._current_card is None:
             return
         card = self._current_card
-        if self._mode == MODE_GROUP and self._group is not None:
-            if self._group.count_of(card.oracle_id) > 0:
-                self._group.remove_one(card.oracle_id)
+        if self._mode == MODE_GROUP:
+            if self._deck.count_of(card.oracle_id) > 0:
+                self._deck.remove_one(card.oracle_id)
                 self._refresh_results_for(card.oracle_id)
