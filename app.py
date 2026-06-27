@@ -9,7 +9,9 @@ from textual.binding import Binding
 from textual.containers import Horizontal
 from textual.widgets import Footer, Tree
 
+from rich.text import Text
 from db import Card, CardDB, load_db
+from histogram import TagHistogramScreen
 from models import Deck, Group
 from partner import partner_mode, partner_filter
 from search import MODE_COMMANDER, MODE_GROUP, MODE_PARTNER, SearchScreen
@@ -62,6 +64,7 @@ class DeckbuilderApp(App):
         Binding("g", "create_group", "New group"),
         Binding("d", "delete_node", "Delete"),
         Binding("e", "edit_card_groups", "Edit groups"),
+        Binding("h", "show_histogram", "Tag histogram"),
         Binding("+", "increment_card", "+1"),
         Binding("-", "decrement_card", "-1"),
     ]
@@ -95,7 +98,7 @@ class DeckbuilderApp(App):
             node = tree.root.add(f"{group.name}  ({total})", expand=True, data=group)
             for entry in entries:
                 base = entry.card.display_label(currency, self._deck.get_printing_idx(entry.card, currency))
-                label = f"[{entry.count}] {base}" if entry.count > 1 else base
+                label = Text(f"[{entry.count}] ") + base if entry.count > 1 else base
                 node.add_leaf(label, data=entry.card)
         uncategorized = self._deck.uncategorized_entries()
         if uncategorized:
@@ -103,7 +106,7 @@ class DeckbuilderApp(App):
             node = tree.root.add(f"Uncategorized  ({total})", expand=True, data=None)
             for entry in uncategorized:
                 base = entry.card.display_label(currency, self._deck.get_printing_idx(entry.card, currency))
-                label = f"[{entry.count}] {base}" if entry.count > 1 else base
+                label = Text(f"[{entry.count}] ") + base if entry.count > 1 else base
                 node.add_leaf(label, data=entry.card)
         tree.root.expand()
 
@@ -171,6 +174,9 @@ class DeckbuilderApp(App):
                 self._deck.groups.append(Group(name=name))
                 self._rebuild_tree()
         self.push_screen(GroupNameModal(), callback=on_name)
+
+    def action_show_histogram(self) -> None:
+        self.push_screen(TagHistogramScreen(self._db, self._deck))
 
     def action_edit_card_groups(self) -> None:
         node = self.query_one("#groups", Tree).cursor_node

@@ -3,6 +3,7 @@
 import json
 import re
 from dataclasses import dataclass, field
+from rich.text import Text
 from pathlib import Path
 from typing import Optional, Union
 
@@ -38,24 +39,29 @@ class Card:
             or "a deck can have any number of cards named" in self.oracle_text.lower()
         )
 
-    def display_label(self, currency: str, printing_idx: int) -> str:
-        """Format: '[3RB] Card Name [EUR: 2.34]', or '[1R] Face 1 // [2U] Face 2 [EUR: 2.34]'."""
+    def display_label(self, currency: str, printing_idx: int) -> Text:
+        """Returns a rich Text: mana cost, name, price — brackets are literal, not markup."""
+        t = Text()
         if self.faces:
-            face_parts: list[str] = []
-            for face_name, face_mana in self.faces:
-                cleaned = re.sub(r'[{}]', '', face_mana) if face_mana else ""
-                face_parts.append(f"[{cleaned}] {face_name}" if cleaned else face_name)
-            name_part = " // ".join(face_parts)
+            for i, (face_name, face_mana) in enumerate(self.faces):
+                if i > 0:
+                    t.append(" // ")
+                mana = re.sub(r'[{}]', '', face_mana) if face_mana else ""
+                if mana:
+                    t.append(f"[{mana}]", style="dim")
+                    t.append(" ")
+                t.append(face_name)
         else:
             mana = re.sub(r'[{}]', '', self.mana_cost) if self.mana_cost else ""
-            name_part = f"[{mana}] {self.name}" if mana else self.name
-
-        parts = [name_part]
+            if mana:
+                t.append(f"[{mana}]", style="dim")
+                t.append(" ")
+            t.append(self.name)
         if 0 <= printing_idx < len(self.printings):
             price = self.printings[printing_idx].prices.get(currency)
             if price is not None:
-                parts.append(f"[{currency.upper()}: {price:.2f}]")
-        return " ".join(parts)
+                t.append(f" [{currency.upper()}: {price:.2f}]", style="dim")
+        return t
 
 
 # Price sources present in Scryfall data keyed without finish suffix.
@@ -140,7 +146,8 @@ def _parse_card(raw: dict) -> Optional[Card]:
 class CardDB:
     cards: dict[str, Card] = field(default_factory=dict)
     rulings: dict[str, list[str]] = field(default_factory=dict)
-    tags: dict[str, list[str]] = field(default_factory=dict)
+    tags: dict[str, list[str]] = field(default_factory=dict)        # expanded (incl. ancestors)
+    leaf_tags: dict[str, list[str]] = field(default_factory=dict)   # direct tags only
 
     def search(
         self,
@@ -204,6 +211,9 @@ class CardDB:
 
     def get_tags(self, oracle_id: str) -> list[str]:
         return self.tags.get(oracle_id, [])
+
+    def get_leaf_tags(self, oracle_id: str) -> list[str]:
+        return self.leaf_tags.get(oracle_id, [])
 
 
 # ── Query AST ─────────────────────────────────────────────────────────────────
@@ -427,6 +437,15 @@ def load_db() -> CardDB:
     print("Loading oracle tags...")
     with open(DATA_DIR / "oracle_tags.json") as f:
         raw_tags: list[dict] = json.load(f)
+
+    # Leaf tags: direct tag labels before ancestor expansion
+    for tag in raw_tags:
+        for tagging in tag.get("taggings", []):
+            oid = tagging.get("oracle_id")
+            if oid and oid in db.cards:
+                db.leaf_tags.setdefault(oid, [])
+                if tag["label"] not in db.leaf_tags[oid]:
+                    db.leaf_tags[oid].append(tag["label"])
 
     tag_by_id: dict[str, dict] = {t["id"]: t for t in raw_tags}
     _memo: dict[str, frozenset] = {}

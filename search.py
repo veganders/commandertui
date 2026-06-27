@@ -10,6 +10,7 @@ from textual.containers import Horizontal
 from textual.screen import Screen
 from textual.widgets import Input, Label, ListItem, ListView
 
+from rich.text import Text
 from db import And, Atom, Card, CardDB, Not, parse_query
 from models import Deck, Group
 from partner import partner_mode, partner_filter
@@ -170,10 +171,10 @@ class SearchScreen(Screen[None]):
             count = self._card_count(card)
             base = card.display_label(currency, self._deck.get_printing_idx(card, currency))
             if count:
-                pfx = f"[{count}]" if count > 1 else " [+]"
-                item = ListItem(Label(f"{pfx} {base}"), classes="result-selected")
+                pfx = Text(f"[{count}] " if count > 1 else " [+] ")
+                item = ListItem(Label(pfx + base), classes="result-selected")
             else:
-                item = ListItem(Label(f"     {base}"))
+                item = ListItem(Label(Text("     ") + base))
             lv.append(item)
         if old_idx is not None and 0 <= old_idx < len(self._results):
             lv.index = old_idx
@@ -203,11 +204,11 @@ class SearchScreen(Screen[None]):
             item = items[i]
             label = item.query_one(Label)
             if count:
-                pfx = f"[{count}]" if count > 1 else " [+]"
-                label.update(f"{pfx} {base}")
+                pfx = Text(f"[{count}] " if count > 1 else " [+] ")
+                label.update(pfx + base)
                 item.add_class("result-selected")
             else:
-                label.update(f"     {base}")
+                label.update(Text("     ") + base)
                 item.remove_class("result-selected")
 
     def _card_count(self, card: Card) -> int:
