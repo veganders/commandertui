@@ -66,28 +66,43 @@ Use this in both the top bar rendering (show/hide the label) and the `action_sea
 
 `Card.allows_multiple() -> bool` lives on the `Card` class in `db.py`. It returns True for basic lands (`"Basic" in type_line`) and cards whose oracle text contains `"a deck can have any number of cards named"`. Do not duplicate this check elsewhere.
 
-### Group
+`Card.display_label(currency, printing_idx) -> rich.text.Text` returns a formatted label: `[mana cost] Name [EUR: 1.23]`. For multi-face cards with mana costs on multiple faces it renders `[1R] Fire // [1U] Ice [EUR: 0.50]`. Returns a `Text` object (not a string) so brackets are always literal, never parsed as Rich markup.
+
+### CardEntry / Group / Deck
+
+Cards have a single deck-level entry with a count and a set of group names they belong to. Groups are just named categories — they hold no card list themselves.
 
 ```python
 @dataclass
 class CardEntry:
     card: Card
     count: int = 1
+    groups: set[str] = field(default_factory=set)
+    # helpers: in_group(name), join_group(name), leave_group(name)
 
 @dataclass
 class Group:
     name: str
-    cards: list[CardEntry]   # one entry per oracle_id, count tracks copies
-    permanent: bool = False  # if True, d-key clears cards but never removes the group
+    permanent: bool = False  # if True, d-key clears memberships but never removes the group
+
+@dataclass
+class Deck:
+    commander: Optional[Card] = None
+    partner: Optional[Card] = None
+    groups: list[Group] = field(default_factory=list)
+    entries: dict[str, CardEntry] = field(default_factory=dict)  # oracle_id → CardEntry
+    selected_printings: dict[str, int] = field(default_factory=dict)
+    name: Optional[str] = None
+    save_path: Optional[Path] = None
 ```
 
-Groups expose helpers: `add(card)`, `remove_one(oracle_id)`, `remove_all(oracle_id)`, `count_of(oracle_id) -> int`, `total_count() -> int`. Use these — do not manipulate `group.cards` directly.
+Key `Deck` helpers: `add(card)`, `remove_one(oracle_id)`, `remove_all(oracle_id)`, `count_of(oracle_id)`, `get_entry(oracle_id)`, `entries_for_group(name)`, `uncategorized_entries()`.
 
-### Deck
-
-`Deck.all_entries() -> list[tuple[Card, int]]` returns commander + partner (count 1 each) + all group cards, deduped by oracle_id. `card_count()`, `mana_curve()`, and `total_cost()` all use this so quantities are respected everywhere.
+`Deck.all_entries() -> list[tuple[Card, int]]` returns commander + partner (count 1 each) + all entries, deduped by oracle_id. `card_count()`, `mana_curve()`, and `total_cost()` all use this.
 
 Mana curve excludes cards where every face is a land (`all("Land" in face for face in type_line.split(" // "))`). MDFCs with a non-land face (e.g. `"Sorcery // Land"`) are included.
+
+Cards with no group memberships appear in a dynamic **Uncategorized** node at the bottom of the tree (not a real Group — its tree node has `data=None`).
 
 ---
 
@@ -95,7 +110,7 @@ Mana curve excludes cards where every face is a land (`all("Land" in face for fa
 
 Tags in `oracle_tags.json` form a parent–child hierarchy via `parent_ids`. During `load_db()` each card's tag set is expanded to include all ancestor labels (e.g. "mana rock" → "mana producer" → "ramp"). This means `otag:ramp` correctly matches mana rocks, mana dorks, land ramp spells, etc. without hardcoding child tag names.
 
-The expansion is done once at load time via a memoised recursive `_all_labels(tag_id)` helper defined inside `load_db()`. The stored `db.tags[oracle_id]` list already contains all ancestor labels.
+The expansion is done once at load time via a memoised recursive `_all_labels(tag_id)` helper defined inside `load_db()`. The stored `db.tags[oracle_id]` list already contains all ancestor labels. Leaf-only tags are stored separately in `db.leaf_tags[oracle_id]`. See also the [Oracle tag leaf vs. ancestor tags](#oracle-tag-leaf-vs-ancestor-tags) section below.
 
 ---
 
@@ -138,17 +153,42 @@ Toggling off (space when card is already in deck) removes the card from **all** 
 
 ---
 
-## TODO
+## Oracle tag leaf vs. ancestor tags
 
-### Card group membership editor
+`CardDB.tags[oracle_id]` holds all ancestor-expanded tag labels (used for search and the histogram's "all tags" mode). `CardDB.leaf_tags[oracle_id]` holds only the directly-assigned tags (used for the histogram's "leaf tags" mode). Both are populated at load time in `load_db()`.
 
-Pressing `e` on a card leaf in the main tree should open a modal/screen listing all groups. Each group is shown with an indicator of whether the card is currently a member, and the user can toggle membership the same way cards are toggled in the search screen (space to add/remove). This allows manually correcting auto-routing and adding a card to groups it wouldn't naturally land in (e.g. putting a modal MDFC into both Lands and Interaction).
+`db.get_tags(oracle_id)` returns the expanded list. `db.get_leaf_tags(oracle_id)` returns the leaf list.
 
-Implementation notes:
-- Reuse the toggle-in/toggle-out pattern from `SearchScreen` — show a `[+]` or count prefix, toggle on space.
-- `+` / `-` should adjust count for `allows_multiple()` cards, same as in search.
-- The screen receives the `Card` and the `Deck` and operates directly on `deck.groups`.
-- On dismiss, call `_rebuild_tree()` so the tree reflects membership changes.
+---
+
+## Tag histogram (`h`)
+
+`TagHistogramScreen` in `histogram.py`. Shows all tags present in the current deck with counts, sorted descending. Toggle between leaf-only and ancestor-expanded modes with `t`. Method is named `_build_content` — do **not** rename to `_render` (Textual uses that internally).
+
+---
+
+## Save / load (`deck_io.py`)
+
+Decks are saved as JSON to `data/decks/`. Filename is a slugified deck name; collisions get `_2`, `_3` appended.
+
+Save format:
+```json
+{
+  "name": "My Deck",
+  "groups": [{"name": "Ramp", "permanent": true}, ...],
+  "commander": {"oracle_id": "...", "printing": {"set_code": "m21", "collector_number": "123", "finish": "nonfoil"}},
+  "partner": null,
+  "cards": [
+    {"oracle_id": "...", "printing": {...}, "count": 1, "groups": ["Ramp"]}
+  ]
+}
+```
+
+`finish` is included in the printing key because Scryfall can have distinct foil/nonfoil entries with the same set + collector number.
+
+`load_deck(path, db)` returns a new `Deck`. In `app.py`, `action_open_deck` mutates `self._deck` in-place (copies all fields) so `TopBar` and other live widget references stay valid without needing updates.
+
+`Deck.name` and `Deck.save_path` are set after the first save or after opening a file. Subsequent `ctrl+s` saves skip the name prompt and write directly to `save_path`.
 
 ---
 
@@ -160,7 +200,11 @@ Implementation notes:
 | `p` | Search / set partner (hidden when commander has no partner mode) |
 | `s` | Open card search for the current group |
 | `g` | Create a new group (prompts for name via `GroupNameModal`) |
-| `d` | On a card leaf: remove all copies from its group. On a group: delete group and its cards (permanent groups: clear cards only). |
+| `d` | On a card leaf: remove card entirely. On a group: remove group memberships + delete group (permanent groups: clear memberships only). |
+| `e` | On a card leaf: open `CardGroupEditorScreen` to toggle group memberships and adjust count |
+| `h` | Open tag histogram screen |
+| `ctrl+s` | Save deck (prompts for name on first save, then saves in place) |
+| `ctrl+o` | Open saved deck (shows list sorted by most-recently-modified) |
 | `+` | Increment copy count for the focused card (only if `card.allows_multiple()`) |
 | `-` | Decrement copy count for the focused card |
 | `q` | Quit |

@@ -11,12 +11,13 @@ from textual.widgets import Footer, Tree
 
 from rich.text import Text
 from db import Card, CardDB, load_db
+from deck_io import list_decks, load_deck, save_deck
 from histogram import TagHistogramScreen
 from models import Deck, Group
 from partner import partner_mode, partner_filter
 from search import MODE_COMMANDER, MODE_GROUP, MODE_PARTNER, SearchScreen
 from settings import Settings
-from widgets import CardDetail, CardGroupEditorScreen, GroupNameModal, TopBar
+from widgets import CardDetail, CardGroupEditorScreen, DeckNameModal, GroupNameModal, OpenDeckScreen, TopBar
 
 
 class DeckbuilderApp(App):
@@ -65,6 +66,8 @@ class DeckbuilderApp(App):
         Binding("d", "delete_node", "Delete"),
         Binding("e", "edit_card_groups", "Edit groups"),
         Binding("h", "show_histogram", "Tag histogram"),
+        Binding("ctrl+s", "save_deck", "Save"),
+        Binding("ctrl+o", "open_deck", "Open"),
         Binding("+", "increment_card", "+1"),
         Binding("-", "decrement_card", "-1"),
     ]
@@ -92,6 +95,13 @@ class DeckbuilderApp(App):
         tree = self.query_one("#groups", Tree)
         tree.clear()
         currency = self._settings.currency
+        if self._deck.commander or self._deck.partner:
+            section_label = "Commander / Partner" if self._deck.partner else "Commander"
+            cmd_node = tree.root.add(section_label, expand=True, data=None)
+            for card in (self._deck.commander, self._deck.partner):
+                if card:
+                    base = card.display_label(currency, self._deck.get_printing_idx(card, currency))
+                    cmd_node.add_leaf(base, data=card)
         for group in self._deck.groups:
             entries = self._deck.entries_for_group(group.name)
             total = sum(e.count for e in entries)
@@ -234,6 +244,46 @@ class DeckbuilderApp(App):
             node = self.query_one("#groups", Tree).cursor_node
             return node is not None and isinstance(node.data, Card)
         return True
+
+    def action_save_deck(self) -> None:
+        if self._deck.name:
+            path = save_deck(self._deck)
+            self._deck.save_path = path
+            self.notify(f"Saved: {path.name}")
+        else:
+            def on_name(name: str | None) -> None:
+                if not name:
+                    return
+                self._deck.name = name
+                path = save_deck(self._deck)
+                self._deck.save_path = path
+                self.query_one(TopBar).refresh_display()
+                self.notify(f"Saved: {path.name}")
+            self.push_screen(DeckNameModal(), callback=on_name)
+
+    def action_open_deck(self) -> None:
+        paths = list_decks()
+        if not paths:
+            self.notify("No saved decks found.", severity="warning")
+            return
+
+        def on_path(path) -> None:
+            if path is None:
+                return
+            new_deck = load_deck(path, self._db)
+            d = self._deck
+            d.name = new_deck.name
+            d.save_path = new_deck.save_path
+            d.commander = new_deck.commander
+            d.partner = new_deck.partner
+            d.groups = new_deck.groups
+            d.entries = new_deck.entries
+            d.selected_printings = new_deck.selected_printings
+            self._rebuild_tree()
+            self.query_one(TopBar).refresh_display()
+            self.notify(f"Opened: {d.name or path.stem}")
+
+        self.push_screen(OpenDeckScreen(paths), callback=on_path)
 
     def action_search_partner(self) -> None:
         commander = self._deck.commander

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Optional
 
 from db import Card
@@ -37,6 +38,8 @@ class Deck:
     groups: list[Group] = field(default_factory=list)
     entries: dict[str, CardEntry] = field(default_factory=dict)  # oracle_id -> CardEntry
     selected_printings: dict[str, int] = field(default_factory=dict)
+    name: Optional[str] = None
+    save_path: Optional[Path] = None
 
     def get_entry(self, oracle_id: str) -> Optional[CardEntry]:
         return self.entries.get(oracle_id)

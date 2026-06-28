@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Optional
 
 from rich.text import Text
@@ -76,6 +78,114 @@ class GroupNameModal(ModalScreen[Optional[str]]):
 
     def action_cancel(self) -> None:
         self.dismiss(None)
+
+
+# ── DeckNameModal ──────────────────────────────────────────────────────────────
+
+class DeckNameModal(ModalScreen[Optional[str]]):
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    CSS = """
+    DeckNameModal {
+        align: center middle;
+        background: $background 60%;
+    }
+    #dn-box {
+        width: 52;
+        height: auto;
+        background: $surface;
+        border: solid $primary;
+        padding: 1 2;
+    }
+    """
+
+    def __init__(self, current_name: Optional[str] = None) -> None:
+        super().__init__()
+        self._current = current_name or ""
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dn-box"):
+            yield Label("Deck name:")
+            yield Input(id="dn-input", placeholder="e.g. Lathril Elves", value=self._current)
+
+    def on_mount(self) -> None:
+        inp = self.query_one("#dn-input", Input)
+        inp.focus()
+        inp.cursor_position = len(inp.value)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        val = event.value.strip()
+        self.dismiss(val if val else None)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+# ── OpenDeckScreen ─────────────────────────────────────────────────────────────
+
+class OpenDeckScreen(ModalScreen[Optional[Path]]):
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+        Binding("enter", "select_deck", "Open"),
+    ]
+
+    CSS = """
+    OpenDeckScreen {
+        align: center middle;
+        background: $background 60%;
+    }
+    #od-box {
+        width: 60;
+        height: auto;
+        max-height: 26;
+        background: $surface;
+        border: solid $primary;
+        padding: 1 2;
+    }
+    #od-list {
+        height: auto;
+        max-height: 20;
+        border: none;
+    }
+    """
+
+    def __init__(self, paths: list[Path]) -> None:
+        super().__init__()
+        self._paths = paths
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="od-box"):
+            yield Label("Open deck:")
+            yield ListView(id="od-list")
+
+    def on_mount(self) -> None:
+        lv = self.query_one("#od-list", ListView)
+        for path in self._paths:
+            try:
+                data = json.loads(path.read_text())
+                name = data.get("name") or path.stem
+            except Exception:
+                name = path.stem
+            lv.append(ListItem(Label(name)))
+        lv.focus()
+        if self._paths:
+            lv.index = 0
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def action_select_deck(self) -> None:
+        lv = self.query_one("#od-list", ListView)
+        idx = lv.index
+        if idx is not None and 0 <= idx < len(self._paths):
+            self.dismiss(self._paths[idx])
+        else:
+            self.dismiss(None)
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        idx = event.list_view.index
+        if idx is not None and 0 <= idx < len(self._paths):
+            self.dismiss(self._paths[idx])
 
 
 # ── CardGroupEditorScreen ──────────────────────────────────────────────────────
@@ -246,8 +356,11 @@ class TopBar(Widget):
         settings = self._settings
 
         t = Text()
+        if deck.name:
+            t.append(deck.name, style="bold")
+            t.append("   ")
         t.append("Commander: ", style="bold")
-        t.append(deck.commander.name if deck.commander else "─ no commander ─")
+        t.append(deck.commander.name if deck.commander else "─ none ─")
         if deck.partner:
             t.append("   Partner: ", style="bold")
             t.append(deck.partner.name)
