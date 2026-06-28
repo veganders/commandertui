@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Callable, Optional
 
+from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
@@ -21,6 +22,28 @@ MODE_COMMANDER = "commander"
 MODE_PARTNER = "partner"
 MODE_GROUP = "group"
 
+
+class _SmartInput(Input):
+    """Input that auto-pairs quotes and jumps over existing closing quotes.
+
+    Calls event.prevent_default() to break Textual's MRO dispatch loop so
+    Input._on_key doesn't run a second time and double-insert the character.
+    """
+
+    async def _on_key(self, event: events.Key) -> None:
+        if event.character != '"':
+            await super()._on_key(event)
+            return
+        self._restart_blink()
+        pos = self.cursor_position
+        val = self.value
+        if pos < len(val) and val[pos] == '"':
+            self.cursor_position = pos + 1          # jump over existing closing quote
+        else:
+            self.insert_text_at_cursor('""')        # insert paired quotes
+            self.cursor_position = pos + 1          # cursor between them
+        event.prevent_default()  # stops Input._on_key from running via MRO dispatch
+        event.stop()
 
 
 class SearchScreen(Screen[None]):
@@ -41,6 +64,14 @@ class SearchScreen(Screen[None]):
         align: left middle;
     }
     #srch-input { width: 1fr; }
+    #srch-suggest {
+        display: none;
+        height: auto;
+        max-height: 10;
+        width: 44;
+        background: $surface;
+        border: solid $primary;
+    }
     #srch-bottom { height: 1fr; }
     #srch-list { width: 1fr; border-right: solid $primary; }
     SearchScreen CardDetail { width: 1fr; padding: 1 2; }
@@ -68,10 +99,15 @@ class SearchScreen(Screen[None]):
         self._results: list[Card] = []
         self._current_card: Optional[Card] = None
         self._search_timer = None
+        self._all_tags: list[str] = []
+        self._suggest_matches: list[str] = []
+        self._suggest_token_start: int = 0
+        self._suggest_token_end: int = 0
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="srch-bar"):
-            yield Input(placeholder=self._placeholder(), id="srch-input")
+            yield _SmartInput(placeholder=self._placeholder(), id="srch-input", select_on_focus=False)
+        yield ListView(id="srch-suggest")
         with Horizontal(id="srch-bottom"):
             yield ListView(id="srch-list")
             yield CardDetail()
@@ -88,32 +124,65 @@ class SearchScreen(Screen[None]):
         return base + "  —  t:type  o:oracle  id:wubrg  c:rg  otag:ramp  mv>=3  eur<=1  -t:land"
 
     def on_mount(self) -> None:
+        self._all_tags = sorted({t for tags in self._db.tags.values() for t in tags})
         self._run_search("")
-        self.query_one("#srch-input", Input).focus()
+        self.query_one("#srch-input", _SmartInput).focus()
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id != "srch-input":
             return
+        inp = event.input
+        # Read value and cursor together so they're consistent with each other.
+        val = inp.value
+        pos = inp.cursor_position
+        self._update_suggestions(val, pos)
         if self._search_timer is not None:
             self._search_timer.stop()
-        value = event.value
-        self._search_timer = self.set_timer(1.0, lambda: self._run_search(value))
+        self._search_timer = self.set_timer(1.0, lambda: self._run_search(val))
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id != "srch-input":
             return
+        self.query_one("#srch-suggest", ListView).display = False
         if self._search_timer is not None:
             self._search_timer.stop()
             self._search_timer = None
         self._run_search(event.value)
 
     def on_key(self, event) -> None:
+        sugg = self.query_one("#srch-suggest", ListView)
+        inp = self.query_one("#srch-input", _SmartInput)
+
+        if sugg.display:
+            if self.focused is inp:
+                if event.key == "down":
+                    sugg.focus()
+                    sugg.index = 0
+                    event.stop()
+                    return
+                if event.key == "escape":
+                    sugg.display = False
+                    event.stop()
+                    return
+            elif self.focused is sugg:
+                if event.key == "escape":
+                    sugg.display = False
+                    inp.focus()
+                    event.stop()
+                    return
+                if event.key == "up" and (sugg.index is None or sugg.index == 0):
+                    inp.focus()
+                    event.stop()
+                    return
+
+        # Down/tab from input moves to result list (only when suggestions are hidden)
         if event.key in ("down", "tab") and isinstance(self.focused, Input):
-            lv = self.query_one("#srch-list", ListView)
-            lv.focus()
-            if self._results:
-                lv.index = 0
-            event.stop()
+            if not sugg.display:
+                lv = self.query_one("#srch-list", ListView)
+                lv.focus()
+                if self._results:
+                    lv.index = 0
+                event.stop()
 
     def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
         if event.list_view.id != "srch-list":
@@ -123,8 +192,112 @@ class SearchScreen(Screen[None]):
         self._current_card = card
         self.query_one(CardDetail).show_card(card, self._db, self._deck, self._settings)
 
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        if event.list_view.id != "srch-suggest":
+            return
+        idx = event.list_view.index
+        if idx is not None and 0 <= idx < len(self._suggest_matches):
+            self._apply_suggestion(self._suggest_matches[idx])
+        event.stop()
+
     def on_card_detail_printing_selected(self, msg: CardDetail.PrintingSelected) -> None:
         self._deck.selected_printings[msg.oracle_id] = msg.printing_idx
+
+    # ── autocomplete ───────────────────────────────────────────────────────────
+
+    def _otag_context(self, value: str, pos: int) -> tuple[int, int, str] | None:
+        """If cursor is inside an otag: token, return (token_start, token_end, partial).
+
+        Handles: otag:ramp, -otag:ramp, otag:"card draw (mid-typing), otag:"card draw" (complete).
+        Returns None if not in an otag token or the token already has a closing quote.
+        """
+        before = value[:pos]
+
+        # Find start of current token — last unquoted space before cursor
+        in_quote = False
+        token_start = 0
+        for i, ch in enumerate(before):
+            if ch == '"':
+                in_quote = not in_quote
+            elif ch == ' ' and not in_quote:
+                token_start = i + 1
+
+        token = before[token_start:]
+        stripped = token.lstrip('-')
+        if not stripped.lower().startswith('otag:'):
+            return None
+
+        after_colon = stripped[5:]
+
+        if after_colon.startswith('"'):
+            inner = after_colon[1:]
+            if '"' in inner:
+                return None  # closing quote present — token is complete
+            partial = inner
+        else:
+            partial = after_colon
+
+        return token_start, pos, partial
+
+    def _update_suggestions(self, value: str, pos: int) -> None:
+        sugg = self.query_one("#srch-suggest", ListView)
+        ctx = self._otag_context(value, pos)
+
+        if ctx is None:
+            if sugg.display:
+                sugg.display = False
+            return
+
+        token_start, token_end, partial = ctx
+        partial_lower = partial.lower()
+        matches = [t for t in self._all_tags if partial_lower in t][:12]
+
+        if not matches:
+            if sugg.display:
+                sugg.display = False
+            return
+
+        self._suggest_token_start = token_start
+        self._suggest_token_end = token_end
+        self._suggest_matches = matches
+
+        sugg.clear()
+        for tag in matches:
+            sugg.append(ListItem(Label(tag)))
+
+        # Align left edge with the 'otag:' token (+2: srch-bar padding + input padding)
+        sugg.styles.margin = (0, 0, 0, min(token_start + 2, 24))
+        sugg.display = True
+
+    def _apply_suggestion(self, tag: str) -> None:
+        inp = self.query_one("#srch-input", _SmartInput)
+        sugg = self.query_one("#srch-suggest", ListView)
+
+        val = inp.value
+        pos = inp.cursor_position
+
+        # Re-detect so token bounds are fresh (user may have kept typing)
+        ctx = self._otag_context(val, pos)
+        if ctx:
+            token_start, token_end, _ = ctx
+        else:
+            token_start, token_end = self._suggest_token_start, self._suggest_token_end
+
+        # inp.replace() uses exclusive end (Python slice semantics).
+        # token_end is already past the partial — val[token_end:] is the tail to keep.
+        replace_end = token_end
+        if token_end < len(val) and val[token_end] == '"':
+            replace_end = token_end + 1  # also consume the auto-paired closing '"'
+
+        neg = val[token_start:token_start + 1] == '-'
+        pfx = '-otag:' if neg else 'otag:'
+        replacement = f'{pfx}"{tag}"' if ' ' in tag else f'{pfx}{tag}'
+
+        inp.replace(replacement, token_start, replace_end)
+
+        sugg.display = False
+        inp.focus()
+        self._run_search(inp.value)
 
     # ── search ─────────────────────────────────────────────────────────────────
 
@@ -180,11 +353,7 @@ class SearchScreen(Screen[None]):
             lv.index = old_idx
 
     def _refresh_results_for(self, *oracle_ids: str) -> None:
-        """Update only the list items whose oracle_id is in oracle_ids.
-
-        Much cheaper than _rebuild_list when only one or two items change —
-        avoids tearing down and recreating all 300 widgets.
-        """
+        """Update only the list items whose oracle_id is in oracle_ids."""
         id_set = set(oracle_ids)
         changed = {
             i: card
@@ -245,7 +414,6 @@ class SearchScreen(Screen[None]):
         if isinstance(self.focused, Input) or self._current_card is None:
             return
         card = self._current_card
-        # Track oracle_ids whose display may change (current + any previously selected)
         changed: set[str] = {card.oracle_id}
         if self._mode == MODE_COMMANDER:
             if self._deck.commander:
