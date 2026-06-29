@@ -126,6 +126,7 @@ The expansion is done once at load time via a memoised recursive `_all_labels(ta
 | `otag:ramp` | oracle tag substring (matches ancestors — see above) |
 | `r:rare` | exact rarity |
 | `mv>=3` | mana value comparison (`=` `<` `>` `<=` `>=`) |
+| `power>=3` / `toughness<=5` | power/toughness comparison; `:` means `=`. Non-numeric values (e.g. `*`) count as 0, consistent with Scryfall. |
 | `eur<=1` / `usd>=5` / `tix=0` | price comparison against cheapest printing |
 | `-t:creature` | negate any filter |
 | `AND` / `OR` / `( )` | explicit boolean; AND has higher precedence than OR |
@@ -208,6 +209,40 @@ Save format:
 | `+` | Increment copy count for the focused card (only if `card.allows_multiple()`) |
 | `-` | Decrement copy count for the focused card |
 | `q` | Quit |
+
+---
+
+## Otag autocomplete (`search.py`)
+
+When the user types `otag:` in the search input, a suggestion dropdown appears below showing matching tag names. Selecting a tag completes the token in-place.
+
+### Implementation
+
+- **`_SmartInput(Input)`** subclass handles `"` auto-pairing. When `"` is typed:
+  - If the character at the cursor is already `"`, jump the cursor over it.
+  - Otherwise insert `""` and place the cursor between them.
+  - Uses `event.prevent_default()` (not `event.stop()`) to break Textual's MRO dispatch loop so `Input._on_key` doesn't also run and double-insert the character. `event.stop()` only prevents widget-tree bubbling; `prevent_default()` sets `_no_default_action` which is checked at the top of each MRO iteration.
+  - `select_on_focus=False` must be set on the input to prevent `inp.focus()` from selecting all text after autocomplete.
+
+- **`_otag_context(value, pos) -> tuple[int, int, str] | None`** — scans left from cursor to find the current token, checks for `otag:` prefix (with optional leading `-`), handles both quoted (`otag:"card draw`) and unquoted (`otag:ramp`) forms. Returns `(token_start, token_end, partial)` or `None` if not in an otag token or the token is already complete (closing `"` present).
+
+- **`_update_suggestions(value, pos)`** — called from `on_input_changed`. Filters `_all_tags` by the partial string, populates the `#srch-suggest` ListView, and sets `margin-left` to align the dropdown with the token position. Hides when no matches or not in otag context.
+
+- **`_apply_suggestion(tag)`** — replaces the typed partial with the completed tag. `inp.replace(text, start, end)` uses **exclusive** `end` (Python slice semantics: `value[end:]` is the preserved tail). So `replace_end = token_end` (no closing quote) or `replace_end = token_end + 1` (consume auto-paired closing `"`).
+
+- Tags with spaces are wrapped in quotes: `otag:"card draw"`. Tags without spaces are unquoted: `otag:ramp`.
+
+- `#srch-suggest` ListView is positioned below the search bar (not inline). Navigation: `down` from input focuses the list; `up` from index 0 or `escape` returns focus to input.
+
+---
+
+## CardDetail printing select (`widgets.py`)
+
+The printing `Select` in `CardDetail` encodes both the oracle_id and the printing index in the option value using a `_PrintingKey(oracle_id, idx)` NamedTuple. This means `on_select_changed` is entirely self-contained — it reads `event.value.oracle_id` and `event.value.idx` directly rather than relying on any widget-level mutable state.
+
+This matters because Textual fires `Select.Changed` asynchronously: by the time the handler runs, the user may have already navigated to a different card, making any `_current_oracle_id` field stale. Encoding the identity in the value avoids that race entirely.
+
+`isinstance(event.value, _PrintingKey)` is the guard — blank/reset events from `set_options` produce `Select.BLANK`, which is not a `_PrintingKey` and is silently ignored.
 
 ---
 

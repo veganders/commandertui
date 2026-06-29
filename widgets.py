@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Optional
+from typing import NamedTuple, Optional
 
 from rich.text import Text
 from textual.app import ComposeResult
@@ -394,6 +394,11 @@ class TopBar(Widget):
 
 # ── CardDetail ─────────────────────────────────────────────────────────────────
 
+class _PrintingKey(NamedTuple):
+    oracle_id: str
+    idx: int
+
+
 class CardDetail(VerticalScroll):
     class PrintingSelected(Message):
         def __init__(self, oracle_id: str, printing_idx: int) -> None:
@@ -403,8 +408,6 @@ class CardDetail(VerticalScroll):
 
     def __init__(self) -> None:
         super().__init__()
-        self._current_oracle_id: Optional[str] = None
-        self._updating = False
 
     def compose(self) -> ComposeResult:
         yield Static(id="cd-text")
@@ -422,7 +425,6 @@ class CardDetail(VerticalScroll):
         deck: Deck,
         settings: Settings,
     ) -> None:
-        self._current_oracle_id = card.oracle_id if card else None
         text_w = self.query_one("#cd-text", Static)
         label_w = self.query_one("#cd-printing-label", Static)
         select_w = self.query_one("#cd-printing-select", Select)
@@ -441,14 +443,12 @@ class CardDetail(VerticalScroll):
                 (
                     f"{p.set_name} #{p.collector_number} {p.finish}"
                     f" — {fmt_price(p.prices.get(currency), currency)}",
-                    i,
+                    _PrintingKey(card.oracle_id, i),
                 )
                 for i, p in enumerate(card.printings)
             ]
-            self._updating = True
             select_w.set_options(options)
-            select_w.value = deck.get_printing_idx(card, currency)
-            self._updating = False
+            select_w.value = _PrintingKey(card.oracle_id, deck.get_printing_idx(card, currency))
             label_w.display = True
             select_w.display = True
         else:
@@ -480,12 +480,5 @@ class CardDetail(VerticalScroll):
         return t
 
     def on_select_changed(self, event: Select.Changed) -> None:
-        if (
-            not self._updating
-            and event.select.id == "cd-printing-select"
-            and self._current_oracle_id is not None
-            and isinstance(event.value, int)
-        ):
-            self.post_message(
-                self.PrintingSelected(self._current_oracle_id, event.value)
-            )
+        if event.select.id == "cd-printing-select" and isinstance(event.value, _PrintingKey):
+            self.post_message(self.PrintingSelected(event.value.oracle_id, event.value.idx))

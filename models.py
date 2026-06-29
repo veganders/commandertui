@@ -99,7 +99,9 @@ class Deck:
 
     def get_printing_idx(self, card: Card, currency: str) -> int:
         if card.oracle_id in self.selected_printings:
-            return self.selected_printings[card.oracle_id]
+            idx = self.selected_printings[card.oracle_id]
+            if 0 <= idx < len(card.printings):
+                return idx
         best_idx, best_price = 0, float("inf")
         for i, p in enumerate(card.printings):
             price = p.prices.get(currency, float("inf"))

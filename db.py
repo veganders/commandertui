@@ -242,7 +242,7 @@ class Not:
 
 QueryNode = Union[Atom, And, Or, Not]
 
-_FILTER_CMP_RE = re.compile(r'^(mv|eur|usd|tix)([<>]=?|=)(.+)$', re.IGNORECASE)
+_FILTER_CMP_RE = re.compile(r'^(mv|eur|usd|tix|power|toughness)([<>]=?|=)(.+)$', re.IGNORECASE)
 _VALUE_CMP_RE = re.compile(r'^([<>]=?|=)(.+)$')
 _CMP_OPS: dict = {
     '=': float.__eq__, '<': float.__lt__, '>': float.__gt__,
@@ -376,6 +376,21 @@ def _eval_atom(atom: Atom, card: Card, tags: list[str]) -> bool:
                 return _CMP_OPS.get(op, float.__eq__)(card.cmc, float(num))
             except ValueError:
                 return True
+        case 'power' | 'toughness':
+            m = _VALUE_CMP_RE.match(value)
+            op, num = (m.group(1), m.group(2)) if m else ('=', value)
+            try:
+                threshold = float(num)
+            except ValueError:
+                return True
+            stat = card.power if key == 'power' else card.toughness
+            if stat is None:
+                return False
+            try:
+                stat_val = float(stat)
+            except ValueError:
+                stat_val = 0.0  # non-numeric (e.g. "*") counts as 0, consistent with Scryfall
+            return _CMP_OPS.get(op, float.__eq__)(stat_val, threshold)
         case 'eur' | 'usd' | 'tix':
             m = _VALUE_CMP_RE.match(value)
             op, num = (m.group(1), m.group(2)) if m else ('=', value)
