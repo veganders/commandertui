@@ -68,17 +68,25 @@ Use this in both the top bar rendering (show/hide the label) and the `action_sea
 
 `Card.display_label(currency, printing_idx) -> rich.text.Text` returns a formatted label: `[mana cost] Name [EUR: 1.23]`. For multi-face cards with mana costs on multiple faces it renders `[1R] Fire // [1U] Ice [EUR: 0.50]`. Returns a `Text` object (not a string) so brackets are always literal, never parsed as Rich markup.
 
-### CardEntry / Group / Deck
+### CardRole / CardEntry / Group / Deck
 
-Cards have a single deck-level entry with a count and a set of group names they belong to. Groups are just named categories — they hold no card list themselves.
+`CardEntry` is the single source of truth for all per-deck card state. Commander and partner are also stored as `CardEntry` (not bare `Card`).
 
 ```python
+class CardRole(Enum):
+    MAIN = auto()
+    COMMANDER = auto()
+    PARTNER = auto()
+
 @dataclass
 class CardEntry:
     card: Card
     count: int = 1
     groups: set[str] = field(default_factory=set)
+    printing_idx: int = 0          # index into card.printings; stored here, not in a separate dict
+    role: CardRole = CardRole.MAIN
     # helpers: in_group(name), join_group(name), leave_group(name)
+    # method:  price(currency: str) -> float | None
 
 @dataclass
 class Group:
@@ -87,18 +95,26 @@ class Group:
 
 @dataclass
 class Deck:
-    commander: Optional[Card] = None
-    partner: Optional[Card] = None
+    commander: Optional[CardEntry] = None
+    partner: Optional[CardEntry] = None
     groups: list[Group] = field(default_factory=list)
     entries: dict[str, CardEntry] = field(default_factory=dict)  # oracle_id → CardEntry
-    selected_printings: dict[str, int] = field(default_factory=dict)
+    selected_printings: dict[str, int] = field(default_factory=dict)  # cache for non-deck cards only
     name: Optional[str] = None
     save_path: Optional[Path] = None
 ```
 
-Key `Deck` helpers: `add(card)`, `remove_one(oracle_id)`, `remove_all(oracle_id)`, `count_of(oracle_id)`, `get_entry(oracle_id)`, `entries_for_group(name)`, `uncategorized_entries()`.
+`CardEntry.price(currency)` returns the price for `card.printings[printing_idx]`, or `None` if unavailable.
 
-`Deck.all_entries() -> list[tuple[Card, int]]` returns commander + partner (count 1 each) + all entries, deduped by oracle_id. `card_count()`, `mana_curve()`, and `total_cost()` all use this.
+`Deck.get_entry_for_card(oracle_id)` searches commander, partner, and entries — use this when you need to find any entry regardless of role (e.g. when handling a printing selection event).
+
+`Deck.get_entry(oracle_id)` only looks in `entries` (not commander/partner) — use this for main-deck operations.
+
+`selected_printings` is kept only as a temporary cache for cards browsed in the search screen but not yet added to the deck. When a card is added via `Deck.add()`, its cached printing_idx is moved into the new `CardEntry` and removed from the cache.
+
+Key `Deck` helpers: `add(card)`, `remove_one(oracle_id)`, `remove_all(oracle_id)`, `count_of(oracle_id)`, `get_entry(oracle_id)`, `get_entry_for_card(oracle_id)`, `entries_for_group(name)`, `uncategorized_entries()`.
+
+`Deck.all_entries() -> list[CardEntry]` returns commander + partner + all entries, deduped by oracle_id. `card_count()`, `mana_curve()`, and `total_cost()` all use this. `total_cost` uses `entry.price(currency)` directly.
 
 Mana curve excludes cards where every face is a land (`all("Land" in face for face in type_line.split(" // "))`). MDFCs with a non-land face (e.g. `"Sorcery // Land"`) are included.
 
@@ -187,7 +203,9 @@ Save format:
 
 `finish` is included in the printing key because Scryfall can have distinct foil/nonfoil entries with the same set + collector number.
 
-`load_deck(path, db)` returns a new `Deck`. In `app.py`, `action_open_deck` mutates `self._deck` in-place (copies all fields) so `TopBar` and other live widget references stay valid without needing updates.
+`_printing_dict(entry)` takes a `CardEntry` and serialises its `printing_idx` to `{set_code, collector_number, finish}`. `_find_printing_idx(card, printing_data)` is the inverse — scans `card.printings` and returns the matching index (0 if not found).
+
+`load_deck(path, db)` returns a new `Deck` with commander/partner as `CardEntry(role=CardRole.COMMANDER/PARTNER)`. In `app.py`, `action_open_deck` mutates `self._deck` in-place (copies all fields) so `TopBar` and other live widget references stay valid without needing updates.
 
 `Deck.name` and `Deck.save_path` are set after the first save or after opening a file. Subsequent `ctrl+s` saves skip the name prompt and write directly to `save_path`.
 
@@ -204,6 +222,7 @@ Save format:
 | `d` | On a card leaf: remove card entirely. On a group: remove group memberships + delete group (permanent groups: clear memberships only). |
 | `e` | On a card leaf: open `CardGroupEditorScreen` to toggle group memberships and adjust count |
 | `h` | Open tag histogram screen |
+| `o` | Cycle sort order within groups (Name → MV → Price → Name …) |
 | `ctrl+s` | Save deck (prompts for name on first save, then saves in place) |
 | `ctrl+o` | Open saved deck (shows list sorted by most-recently-modified) |
 | `+` | Increment copy count for the focused card (only if `card.allows_multiple()`) |
@@ -243,6 +262,46 @@ The printing `Select` in `CardDetail` encodes both the oracle_id and the printin
 This matters because Textual fires `Select.Changed` asynchronously: by the time the handler runs, the user may have already navigated to a different card, making any `_current_oracle_id` field stale. Encoding the identity in the value avoids that race entirely.
 
 `isinstance(event.value, _PrintingKey)` is the guard — blank/reset events from `set_options` produce `Select.BLANK`, which is not a `_PrintingKey` and is silently ignored.
+
+---
+
+## Sorting (`sorting.py`)
+
+Cards within each group are sorted by the current sort order, cycled with `o`. The sort is purely cosmetic — it never affects the deck data.
+
+```python
+class CardSorter(ABC):
+    label: str = ""
+    @abstractmethod
+    def key(self, entry: CardEntry) -> Any: ...
+
+class NameSorter(CardSorter):   label = "Name";  key → entry.card.name.lower()
+class MVSorter(CardSorter):     label = "MV";    key → entry.card.cmc
+class PriceSorter(CardSorter):  label = "Price"; key → entry.price(currency) or inf
+```
+
+`PriceSorter(currency)` takes currency in its constructor — no deck reference needed since `entry.price()` is self-contained.
+
+`DeckbuilderApp._sorters()` returns `[NameSorter(), MVSorter(), PriceSorter(currency)]`. `_sort_idx` cycles through them. `action_cycle_sort` rebuilds the tree and shows a notify with the new label. Add new sorters by appending to `_sorters()`.
+
+Commander/partner nodes are not sorted (they're always shown first, in commander-then-partner order).
+
+---
+
+## Maybeboard (pending implementation)
+
+**Design decision not yet made.** Two options discussed:
+
+**Option A — separate `Deck.maybeboard: dict[str, CardEntry]`**: completely separate from `entries`. All existing methods (`all_entries`, `entries_for_group`, etc.) naturally exclude maybeboard with zero filtering. Simple, but only one maybeboard.
+
+**Option B — `Group.maybeboard: bool` flag**: multiple maybeboard groups. A card is "in maybeboard" if any of its `entry.groups` names a maybeboard group. Requires filtering in `all_entries()` and in `_rebuild_tree` (to suppress maybeboard cards from non-maybeboard groups). Reuses existing group infrastructure.
+
+**Requirements agreed:**
+- Maybeboard cards do not count toward `card_count`, mana curve, or `total_cost`.
+- Maybeboard cards do not appear under regular groups even if auto-routing would place them there.
+- Multiple maybeboard-style lists would be useful (e.g. "Considering", "Sideboard").
+
+Option B is preferred if implemented; update `Group`, `Deck.all_entries()`, `_rebuild_tree`, `deck_io.py` save format, and search screen `[M]` indicator.
 
 ---
 

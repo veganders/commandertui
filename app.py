@@ -98,6 +98,7 @@ class DeckbuilderApp(App):
 
     def on_mount(self) -> None:
         self._rebuild_tree()
+        self.query_one("#groups", Tree).focus()
 
     # ── tree ───────────────────────────────────────────────────────────────────
 
@@ -156,6 +157,7 @@ class DeckbuilderApp(App):
     def on_top_bar_currency_changed(self, msg: TopBar.CurrencyChanged) -> None:
         self._settings.currency = msg.currency
         self._settings.save()
+        self._rebuild_tree()
         self.query_one(TopBar).refresh_display()
         if self._current_card:
             self.query_one(CardDetail).show_card(
