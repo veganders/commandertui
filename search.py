@@ -13,7 +13,7 @@ from textual.widgets import Input, Label, ListItem, ListView
 
 from rich.text import Text
 from db import And, Atom, Card, CardDB, Not, parse_query
-from models import Deck, Group
+from models import CardEntry, CardRole, Deck, Group
 from partner import partner_mode, partner_filter
 from settings import Settings
 from widgets import CardDetail
@@ -201,7 +201,11 @@ class SearchScreen(Screen[None]):
         event.stop()
 
     def on_card_detail_printing_selected(self, msg: CardDetail.PrintingSelected) -> None:
-        self._deck.selected_printings[msg.oracle_id] = msg.printing_idx
+        entry = self._deck.get_entry_for_card(msg.oracle_id)
+        if entry is not None:
+            entry.printing_idx = msg.printing_idx
+        else:
+            self._deck.selected_printings[msg.oracle_id] = msg.printing_idx
 
     # ── autocomplete ───────────────────────────────────────────────────────────
 
@@ -328,9 +332,9 @@ class SearchScreen(Screen[None]):
         if self._mode == MODE_GROUP:
             ci: set[str] = set()
             if self._deck.commander:
-                ci.update(self._deck.commander.color_identity)
+                ci.update(self._deck.commander.card.color_identity)
             if self._deck.partner:
-                ci.update(self._deck.partner.color_identity)
+                ci.update(self._deck.partner.card.color_identity)
             if ci:
                 return Atom(key="id", value="".join(sorted(ci)))
         return None
@@ -382,9 +386,9 @@ class SearchScreen(Screen[None]):
 
     def _card_count(self, card: Card) -> int:
         if self._mode == MODE_COMMANDER:
-            return 1 if self._deck.commander and self._deck.commander.oracle_id == card.oracle_id else 0
+            return 1 if self._deck.commander and self._deck.commander.card.oracle_id == card.oracle_id else 0
         if self._mode == MODE_PARTNER:
-            return 1 if self._deck.partner and self._deck.partner.oracle_id == card.oracle_id else 0
+            return 1 if self._deck.partner and self._deck.partner.card.oracle_id == card.oracle_id else 0
         if self._mode == MODE_GROUP:
             return self._deck.count_of(card.oracle_id)
         return 0
@@ -417,23 +421,23 @@ class SearchScreen(Screen[None]):
         changed: set[str] = {card.oracle_id}
         if self._mode == MODE_COMMANDER:
             if self._deck.commander:
-                changed.add(self._deck.commander.oracle_id)
-            new_cmd = (
-                None if self._deck.commander and self._deck.commander.oracle_id == card.oracle_id
-                else card
-            )
+                changed.add(self._deck.commander.card.oracle_id)
+            if self._deck.commander and self._deck.commander.card.oracle_id == card.oracle_id:
+                new_cmd: CardEntry | None = None
+            else:
+                new_cmd = CardEntry(card=card, role=CardRole.COMMANDER)
             self._deck.commander = new_cmd
             if self._deck.partner is not None:
-                info = partner_mode(new_cmd) if new_cmd else None
-                if info is None or not partner_filter(info)(self._deck.partner):
+                info = partner_mode(new_cmd.card) if new_cmd else None
+                if info is None or not partner_filter(info)(self._deck.partner.card):
                     self._deck.partner = None
         elif self._mode == MODE_PARTNER:
             if self._deck.partner:
-                changed.add(self._deck.partner.oracle_id)
-            self._deck.partner = (
-                None if self._deck.partner and self._deck.partner.oracle_id == card.oracle_id
-                else card
-            )
+                changed.add(self._deck.partner.card.oracle_id)
+            if self._deck.partner and self._deck.partner.card.oracle_id == card.oracle_id:
+                self._deck.partner = None
+            else:
+                self._deck.partner = CardEntry(card=card, role=CardRole.PARTNER)
         elif self._mode == MODE_GROUP:
             if self._deck.count_of(card.oracle_id) > 0:
                 self._deck.remove_all(card.oracle_id)

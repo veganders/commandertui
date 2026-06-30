@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 
 from db import CardDB
-from models import CardEntry, Deck, Group
+from models import CardEntry, CardRole, Deck, Group
 
 DECKS_DIR = Path(__file__).parent / "data" / "decks"
 
@@ -30,10 +30,10 @@ def _unique_path(name: str) -> Path:
         counter += 1
 
 
-def _printing_dict(card, deck: Deck) -> dict | None:
-    idx = deck.get_printing_idx(card, "usd")
-    if 0 <= idx < len(card.printings):
-        p = card.printings[idx]
+def _printing_dict(entry: CardEntry) -> dict | None:
+    idx = entry.printing_idx
+    if 0 <= idx < len(entry.card.printings):
+        p = entry.card.printings[idx]
         return {"set_code": p.set_code, "collector_number": p.collector_number, "finish": p.finish}
     return None
 
@@ -51,18 +51,18 @@ def save_deck(deck: Deck) -> Path:
     }
     if deck.commander:
         data["commander"] = {
-            "oracle_id": deck.commander.oracle_id,
-            "printing": _printing_dict(deck.commander, deck),
+            "oracle_id": deck.commander.card.oracle_id,
+            "printing": _printing_dict(deck.commander),
         }
     if deck.partner:
         data["partner"] = {
-            "oracle_id": deck.partner.oracle_id,
-            "printing": _printing_dict(deck.partner, deck),
+            "oracle_id": deck.partner.card.oracle_id,
+            "printing": _printing_dict(deck.partner),
         }
     for entry in deck.entries.values():
         data["cards"].append({
             "oracle_id": entry.card.oracle_id,
-            "printing": _printing_dict(entry.card, deck),
+            "printing": _printing_dict(entry),
             "count": entry.count,
             "groups": sorted(entry.groups),
         })
@@ -71,17 +71,17 @@ def save_deck(deck: Deck) -> Path:
     return path
 
 
-def _resolve_printing(card, printing_data: dict | None, deck: Deck) -> None:
+def _find_printing_idx(card, printing_data: dict | None) -> int:
     if not printing_data or not card.printings:
-        return
+        return 0
     for i, p in enumerate(card.printings):
         if (
             p.set_code == printing_data.get("set_code")
             and p.collector_number == printing_data.get("collector_number")
             and p.finish == printing_data.get("finish")
         ):
-            deck.selected_printings[card.oracle_id] = i
-            return
+            return i
+    return 0
 
 
 def load_deck(path: Path, db: CardDB) -> Deck:
@@ -97,24 +97,24 @@ def load_deck(path: Path, db: CardDB) -> Deck:
     if cmd_data:
         card = db.cards.get(cmd_data["oracle_id"])
         if card:
-            deck.commander = card
-            _resolve_printing(card, cmd_data.get("printing"), deck)
+            printing_idx = _find_printing_idx(card, cmd_data.get("printing"))
+            deck.commander = CardEntry(card=card, role=CardRole.COMMANDER, printing_idx=printing_idx)
 
     partner_data = data.get("partner")
     if partner_data:
         card = db.cards.get(partner_data["oracle_id"])
         if card:
-            deck.partner = card
-            _resolve_printing(card, partner_data.get("printing"), deck)
+            printing_idx = _find_printing_idx(card, partner_data.get("printing"))
+            deck.partner = CardEntry(card=card, role=CardRole.PARTNER, printing_idx=printing_idx)
 
     for card_data in data.get("cards", []):
         card = db.cards.get(card_data["oracle_id"])
         if card is None:
             continue
-        entry = CardEntry(card=card, count=card_data.get("count", 1))
+        printing_idx = _find_printing_idx(card, card_data.get("printing"))
+        entry = CardEntry(card=card, count=card_data.get("count", 1), printing_idx=printing_idx)
         entry.groups = set(card_data.get("groups", []))
         deck.entries[card.oracle_id] = entry
-        _resolve_printing(card, card_data.get("printing"), deck)
 
     return deck
 

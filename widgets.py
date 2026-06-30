@@ -360,10 +360,10 @@ class TopBar(Widget):
             t.append(deck.name, style="bold")
             t.append("   ")
         t.append("Commander: ", style="bold")
-        t.append(deck.commander.name if deck.commander else "─ none ─")
+        t.append(deck.commander.card.name if deck.commander else "─ none ─")
         if deck.partner:
             t.append("   Partner: ", style="bold")
-            t.append(deck.partner.name)
+            t.append(deck.partner.card.name)
         self.query_one("#tb-commander", Static).update(t)
 
         curve = deck.mana_curve()

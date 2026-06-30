@@ -1,12 +1,19 @@
-"""Deck data model — CardEntry, Group, Deck."""
+"""Deck data model — CardRole, CardEntry, Group, Deck."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum, auto
 from pathlib import Path
 from typing import Optional
 
 from db import Card
+
+
+class CardRole(Enum):
+    MAIN = auto()
+    COMMANDER = auto()
+    PARTNER = auto()
 
 
 @dataclass
@@ -14,6 +21,8 @@ class CardEntry:
     card: Card
     count: int = 1
     groups: set[str] = field(default_factory=set)
+    printing_idx: int = 0
+    role: CardRole = CardRole.MAIN
 
     def in_group(self, name: str) -> bool:
         return name in self.groups
@@ -24,6 +33,11 @@ class CardEntry:
     def leave_group(self, name: str) -> None:
         self.groups.discard(name)
 
+    def price(self, currency: str) -> float | None:
+        if not self.card.printings or not (0 <= self.printing_idx < len(self.card.printings)):
+            return None
+        return self.card.printings[self.printing_idx].prices.get(currency)
+
 
 @dataclass
 class Group:
@@ -33,13 +47,21 @@ class Group:
 
 @dataclass
 class Deck:
-    commander: Optional[Card] = None
-    partner: Optional[Card] = None
+    commander: Optional[CardEntry] = None
+    partner: Optional[CardEntry] = None
     groups: list[Group] = field(default_factory=list)
-    entries: dict[str, CardEntry] = field(default_factory=dict)  # oracle_id -> CardEntry
-    selected_printings: dict[str, int] = field(default_factory=dict)
+    entries: dict[str, CardEntry] = field(default_factory=dict)  # oracle_id → CardEntry
+    selected_printings: dict[str, int] = field(default_factory=dict)  # cache for non-deck cards
     name: Optional[str] = None
     save_path: Optional[Path] = None
+
+    def get_entry_for_card(self, oracle_id: str) -> Optional[CardEntry]:
+        """Find any entry (commander, partner, or main) by oracle_id."""
+        if self.commander and self.commander.card.oracle_id == oracle_id:
+            return self.commander
+        if self.partner and self.partner.card.oracle_id == oracle_id:
+            return self.partner
+        return self.entries.get(oracle_id)
 
     def get_entry(self, oracle_id: str) -> Optional[CardEntry]:
         return self.entries.get(oracle_id)
@@ -52,7 +74,8 @@ class Deck:
         if card.oracle_id in self.entries:
             self.entries[card.oracle_id].count += 1
         else:
-            self.entries[card.oracle_id] = CardEntry(card=card)
+            printing_idx = self.selected_printings.pop(card.oracle_id, 0)
+            self.entries[card.oracle_id] = CardEntry(card=card, printing_idx=printing_idx)
 
     def remove_one(self, oracle_id: str) -> None:
         """Decrement count; removes entry (and all group memberships) when count hits 0."""
@@ -72,32 +95,37 @@ class Deck:
     def uncategorized_entries(self) -> list[CardEntry]:
         return [e for e in self.entries.values() if not e.groups]
 
-    def all_entries(self) -> list[tuple[Card, int]]:
-        """Commander + partner (count 1 each) + all deck entries."""
-        result: list[tuple[Card, int]] = []
+    def all_entries(self) -> list[CardEntry]:
+        """Commander + partner (count 1 each) + all deck entries, deduped by oracle_id."""
+        result: list[CardEntry] = []
         seen: set[str] = set()
-        for card in (self.commander, self.partner):
-            if card and card.oracle_id not in seen:
-                result.append((card, 1))
-                seen.add(card.oracle_id)
+        for entry in (self.commander, self.partner):
+            if entry and entry.card.oracle_id not in seen:
+                result.append(entry)
+                seen.add(entry.card.oracle_id)
         for entry in self.entries.values():
             if entry.card.oracle_id not in seen:
-                result.append((entry.card, entry.count))
+                result.append(entry)
                 seen.add(entry.card.oracle_id)
         return result
 
     def card_count(self) -> int:
-        return sum(count for _, count in self.all_entries())
+        return sum(e.count for e in self.all_entries())
 
     def mana_curve(self) -> list[int]:
         buckets = [0] * 7
-        for card, count in self.all_entries():
+        for entry in self.all_entries():
+            card = entry.card
             if all("Land" in face for face in card.type_line.split(" // ")):
                 continue
-            buckets[min(int(card.cmc), 6)] += count
+            buckets[min(int(card.cmc), 6)] += entry.count
         return buckets
 
-    def get_printing_idx(self, card: Card, currency: str) -> int:
+    def get_printing_idx(self, card: Card, currency: str = "") -> int:
+        """Return stored printing_idx for deck cards; cheapest printing for non-deck cards."""
+        entry = self.get_entry_for_card(card.oracle_id)
+        if entry is not None:
+            return entry.printing_idx
         if card.oracle_id in self.selected_printings:
             idx = self.selected_printings[card.oracle_id]
             if 0 <= idx < len(card.printings):
@@ -113,13 +141,10 @@ class Deck:
         total = 0.0
         priced = 0
         all_count = 0
-        for card, count in self.all_entries():
-            all_count += count
-            if not card.printings:
-                continue
-            idx = self.get_printing_idx(card, currency)
-            price = card.printings[idx].prices.get(currency)
-            if price is not None:
-                total += price * count
-                priced += count
+        for entry in self.all_entries():
+            all_count += entry.count
+            p = entry.price(currency)
+            if p is not None:
+                total += p * entry.count
+                priced += entry.count
         return total, priced, all_count

@@ -13,10 +13,11 @@ from rich.text import Text
 from db import Card, CardDB, load_db
 from deck_io import list_decks, load_deck, save_deck
 from histogram import TagHistogramScreen
-from models import Deck, Group
+from models import CardEntry, CardRole, Deck, Group
 from partner import partner_mode, partner_filter
 from search import MODE_COMMANDER, MODE_GROUP, MODE_PARTNER, SearchScreen
 from settings import Settings
+from sorting import CardSorter, MVSorter, NameSorter, PriceSorter
 from widgets import CardDetail, CardGroupEditorScreen, DeckNameModal, GroupNameModal, OpenDeckScreen, TopBar
 
 
@@ -66,6 +67,7 @@ class DeckbuilderApp(App):
         Binding("d", "delete_node", "Delete"),
         Binding("e", "edit_card_groups", "Edit groups"),
         Binding("h", "show_histogram", "Tag histogram"),
+        Binding("o", "cycle_sort", "Sort"),
         Binding("ctrl+s", "save_deck", "Save"),
         Binding("ctrl+o", "open_deck", "Open"),
         Binding("+", "increment_card", "+1"),
@@ -78,6 +80,14 @@ class DeckbuilderApp(App):
         self._deck = deck
         self._settings = settings
         self._current_card: Optional[Card] = None
+        self._sort_idx: int = 0
+
+    def _sorters(self) -> list[CardSorter]:
+        return [NameSorter(), MVSorter(), PriceSorter(self._settings.currency)]
+
+    def _current_sorter(self) -> CardSorter:
+        sorters = self._sorters()
+        return sorters[self._sort_idx % len(sorters)]
 
     def compose(self) -> ComposeResult:
         yield TopBar(self._deck, self._settings)
@@ -95,29 +105,34 @@ class DeckbuilderApp(App):
         tree = self.query_one("#groups", Tree)
         tree.clear()
         currency = self._settings.currency
+        sorter = self._current_sorter()
+
         if self._deck.commander or self._deck.partner:
             section_label = "Commander / Partner" if self._deck.partner else "Commander"
             cmd_node = tree.root.add(section_label, expand=True, data=None)
-            for card in (self._deck.commander, self._deck.partner):
-                if card:
-                    base = card.display_label(currency, self._deck.get_printing_idx(card, currency))
-                    cmd_node.add_leaf(base, data=card)
+            for entry in (self._deck.commander, self._deck.partner):
+                if entry:
+                    base = entry.card.display_label(currency, entry.printing_idx)
+                    cmd_node.add_leaf(base, data=entry.card)
+
         for group in self._deck.groups:
-            entries = self._deck.entries_for_group(group.name)
+            entries = sorted(self._deck.entries_for_group(group.name), key=sorter.key)
             total = sum(e.count for e in entries)
             node = tree.root.add(f"{group.name}  ({total})", expand=True, data=group)
             for entry in entries:
-                base = entry.card.display_label(currency, self._deck.get_printing_idx(entry.card, currency))
+                base = entry.card.display_label(currency, entry.printing_idx)
                 label = Text(f"[{entry.count}] ") + base if entry.count > 1 else base
                 node.add_leaf(label, data=entry.card)
-        uncategorized = self._deck.uncategorized_entries()
+
+        uncategorized = sorted(self._deck.uncategorized_entries(), key=sorter.key)
         if uncategorized:
             total = sum(e.count for e in uncategorized)
             node = tree.root.add(f"Uncategorized  ({total})", expand=True, data=None)
             for entry in uncategorized:
-                base = entry.card.display_label(currency, self._deck.get_printing_idx(entry.card, currency))
+                base = entry.card.display_label(currency, entry.printing_idx)
                 label = Text(f"[{entry.count}] ") + base if entry.count > 1 else base
                 node.add_leaf(label, data=entry.card)
+
         tree.root.expand()
 
     def _group_for_cursor(self) -> Optional[Group]:
@@ -148,7 +163,11 @@ class DeckbuilderApp(App):
             )
 
     def on_card_detail_printing_selected(self, msg: CardDetail.PrintingSelected) -> None:
-        self._deck.selected_printings[msg.oracle_id] = msg.printing_idx
+        entry = self._deck.get_entry_for_card(msg.oracle_id)
+        if entry is not None:
+            entry.printing_idx = msg.printing_idx
+        else:
+            self._deck.selected_printings[msg.oracle_id] = msg.printing_idx
         self.query_one(TopBar).refresh_display()
 
     # ── search ─────────────────────────────────────────────────────────────────
@@ -187,6 +206,11 @@ class DeckbuilderApp(App):
 
     def action_show_histogram(self) -> None:
         self.push_screen(TagHistogramScreen(self._db, self._deck))
+
+    def action_cycle_sort(self) -> None:
+        self._sort_idx = (self._sort_idx + 1) % len(self._sorters())
+        self._rebuild_tree()
+        self.notify(f"Sort: {self._current_sorter().label}")
 
     def action_edit_card_groups(self) -> None:
         node = self.query_one("#groups", Tree).cursor_node
@@ -238,7 +262,7 @@ class DeckbuilderApp(App):
         if action == "search_partner":
             return (
                 self._deck.commander is not None
-                and partner_mode(self._deck.commander) is not None
+                and partner_mode(self._deck.commander.card) is not None
             )
         if action == "edit_card_groups":
             node = self.query_one("#groups", Tree).cursor_node
@@ -289,7 +313,7 @@ class DeckbuilderApp(App):
         commander = self._deck.commander
         if commander is None:
             return
-        info = partner_mode(commander)
+        info = partner_mode(commander.card)
         if info is None:
             return
 
@@ -303,7 +327,7 @@ class DeckbuilderApp(App):
             results = self._db.search(name=name)
             card = next((c for c in results if c.name == name), None)
             if card:
-                self._deck.partner = card
+                self._deck.partner = CardEntry(card=card, role=CardRole.PARTNER)
                 self.query_one(TopBar).refresh_display()
             else:
                 self.notify(f"Partner not found in database: {name}", severity="warning")

@@ -56,9 +56,9 @@ class TagHistogramScreen(Screen[None]):
         tag_source = self._db.leaf_tags if self._leaf_only else self._db.tags
         counts: dict[str, int] = {}
         oracle_ids: set[str] = set()
-        for card in (self._deck.commander, self._deck.partner):
-            if card:
-                oracle_ids.add(card.oracle_id)
+        for entry in (self._deck.commander, self._deck.partner):
+            if entry:
+                oracle_ids.add(entry.card.oracle_id)
         for entry in self._deck.entries.values():
             oracle_ids.add(entry.card.oracle_id)
         for oid in oracle_ids:
