@@ -121,7 +121,7 @@ class SearchScreen(Screen[None]):
                 MODE_PARTNER: "Search for a partner",
                 MODE_GROUP: f"Add cards to '{self._group.name}'" if self._group else "Search cards",
             }.get(self._mode, "Search cards")
-        return base + "  —  t:type  o:oracle  id:wubrg  c:rg  otag:ramp  mv>=3  eur<=1  -t:land"
+        return base + "  —  t:type  o:oracle  kw:partner  id:wubrg  c:rg  otag:ramp  mv>=3  eur<=1  -t:land"
 
     def on_mount(self) -> None:
         self._all_tags = sorted({t for tags in self._db.tags.values() for t in tags})

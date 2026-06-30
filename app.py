@@ -68,6 +68,7 @@ class DeckbuilderApp(App):
         Binding("e", "edit_card_groups", "Edit groups"),
         Binding("h", "show_histogram", "Tag histogram"),
         Binding("o", "cycle_sort", "Sort"),
+        Binding("ctrl+n", "new_deck", "New"),
         Binding("ctrl+s", "save_deck", "Save"),
         Binding("ctrl+o", "open_deck", "Open"),
         Binding("+", "increment_card", "+1"),
@@ -271,6 +272,13 @@ class DeckbuilderApp(App):
             return node is not None and isinstance(node.data, Card)
         return True
 
+    def action_new_deck(self) -> None:
+        self._deck.__dict__.update(_fresh_deck().__dict__)
+        self._current_card = None
+        self._rebuild_tree()
+        self.query_one(TopBar).refresh_display()
+        self.query_one(CardDetail).show_card(None, self._db, self._deck, self._settings)
+
     def action_save_deck(self) -> None:
         if self._deck.name:
             path = save_deck(self._deck)
@@ -296,18 +304,10 @@ class DeckbuilderApp(App):
         def on_path(path) -> None:
             if path is None:
                 return
-            new_deck = load_deck(path, self._db)
-            d = self._deck
-            d.name = new_deck.name
-            d.save_path = new_deck.save_path
-            d.commander = new_deck.commander
-            d.partner = new_deck.partner
-            d.groups = new_deck.groups
-            d.entries = new_deck.entries
-            d.selected_printings = new_deck.selected_printings
+            self._deck.__dict__.update(load_deck(path, self._db).__dict__)
             self._rebuild_tree()
             self.query_one(TopBar).refresh_display()
-            self.notify(f"Opened: {d.name or path.stem}")
+            self.notify(f"Opened: {self._deck.name or path.stem}")
 
         self.push_screen(OpenDeckScreen(paths), callback=on_path)
 
@@ -352,11 +352,8 @@ class DeckbuilderApp(App):
         )
 
 
-if __name__ == "__main__":
-    db = load_db()
-    settings = Settings.load()
-
-    deck = Deck(
+def _fresh_deck() -> Deck:
+    return Deck(
         groups=[
             Group("Ramp", permanent=True),
             Group("Draw", permanent=True),
@@ -365,4 +362,8 @@ if __name__ == "__main__":
         ],
     )
 
-    DeckbuilderApp(db, deck, settings).run()
+
+if __name__ == "__main__":
+    db = load_db()
+    settings = Settings.load()
+    DeckbuilderApp(db, _fresh_deck(), settings).run()

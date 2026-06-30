@@ -367,6 +367,8 @@ def _eval_atom(atom: Atom, card: Card, tags: list[str]) -> bool:
             return color_set <= set(card.colors)
         case 'otag':
             return any(value.lower() in t.lower() for t in tags)
+        case 'kw' | 'keyword':
+            return any(value.lower() in kw.lower() for kw in card.keywords)
         case 'r' | 'rarity':
             return card.rarity.lower() == value.lower()
         case 'mv':

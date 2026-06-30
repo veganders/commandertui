@@ -140,6 +140,7 @@ The expansion is done once at load time via a memoised recursive `_all_labels(ta
 | `id:wubrg` | color identity is a **subset** of the given colors |
 | `c:rg` | card colors include **at least** red and green |
 | `otag:ramp` | oracle tag substring (matches ancestors — see above) |
+| `kw:partner` | keyword substring (matches entries in `card.keywords`) |
 | `r:rare` | exact rarity |
 | `mv>=3` | mana value comparison (`=` `<` `>` `<=` `>=`) |
 | `power>=3` / `toughness<=5` | power/toughness comparison; `:` means `=`. Non-numeric values (e.g. `*`) count as 0, consistent with Scryfall. |
@@ -223,6 +224,7 @@ Save format:
 | `e` | On a card leaf: open `CardGroupEditorScreen` to toggle group memberships and adjust count |
 | `h` | Open tag histogram screen |
 | `o` | Cycle sort order within groups (Name → MV → Price → Name …) |
+| `ctrl+n` | New deck — resets to initial state (four permanent groups, no cards) |
 | `ctrl+s` | Save deck (prompts for name on first save, then saves in place) |
 | `ctrl+o` | Open saved deck (shows list sorted by most-recently-modified) |
 | `+` | Increment copy count for the focused card (only if `card.allows_multiple()`) |
