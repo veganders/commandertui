@@ -301,7 +301,7 @@ def parse_query(query: str) -> QueryNode:
       o:"draw a card"    — oracle text substring (quotes allow spaces)
       id:wubrg           — color identity is subset of given colors
       c:rg               — card colors include at least the given colors
-      otag:ramp          — oracle tag substring
+      otag:ramp          — oracle tag exact match
       r:rare             — exact rarity
       mv:3 / mv>=2       — mana value comparison
       eur<=1 / usd>=5    — price comparison (cheapest printing)
@@ -347,7 +347,11 @@ def parse_query(query: str) -> QueryNode:
             if peek() == ')':
                 consume()
             return node
-        return _parse_filter(consume())
+        tok = peek()
+        if tok is None or tok == ')':
+            return And([])
+        consume()
+        return _parse_filter(tok)
 
     return parse_or() if tokens else And([])
 
@@ -366,7 +370,7 @@ def _eval_atom(atom: Atom, card: Card, tags: list[str]) -> bool:
             color_set = {ch.upper() for ch in value if ch.isalpha()}
             return color_set <= set(card.colors)
         case 'otag':
-            return any(value.lower() in t.lower() for t in tags)
+            return value.lower() in {t.lower() for t in tags}
         case 'kw' | 'keyword':
             return any(value.lower() in kw.lower() for kw in card.keywords)
         case 'r' | 'rarity':
