@@ -139,7 +139,7 @@ The expansion is done once at load time via a memoised recursive `_all_labels(ta
 | `o:"text"` | oracle text substring (quotes allow spaces) |
 | `id:wubrg` | color identity is a **subset** of the given colors |
 | `c:rg` | card colors include **at least** red and green |
-| `otag:ramp` | oracle tag substring (matches ancestors — see above) |
+| `otag:ramp` | oracle tag exact match (matches ancestors — see above) |
 | `kw:partner` | keyword substring (matches entries in `card.keywords`) |
 | `r:rare` | exact rarity |
 | `mv>=3` | mana value comparison (`=` `<` `>` `<=` `>=`) |
@@ -159,11 +159,14 @@ When a card is toggled or incremented into the deck from the search screen (`spa
 | Condition | Target group |
 |---|---|
 | any face of `type_line` contains `"land"` (case-insensitive) | **Lands** |
-| any oracle tag contains `"ramp"` | **Ramp** |
-| any oracle tag contains `"draw"` | **Draw** |
+| oracle tag exactly equals `"ramp"` | **Ramp** |
+| oracle tag exactly equals `"draw"` | **Draw** |
+| oracle tag exactly equals `"removal"` | **Interaction** |
 | none of the above | fallback to the currently open group |
 
-A card can match multiple conditions and land in multiple groups (e.g. a card tagged both ramp and draw). Lookup is by group name (case-insensitive); if no group named "Lands" / "Ramp" / "Draw" exists, that condition is skipped.
+A card can match multiple conditions and land in multiple groups. Lookup is by group name (case-insensitive); if no matching group exists, that condition is skipped.
+
+Tag routes are defined in `SearchScreen._TAG_ROUTES` as a list of `(tag, group_name)` tuples — add new routes there. Lands remain a special case (type-line check, not a tag). Tag matching is exact (not substring) to avoid false matches like "drawback" → Draw.
 
 The `+` key on a card already in the deck increments its count in whichever group(s) already hold it, rather than re-routing.
 

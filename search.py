@@ -393,6 +393,13 @@ class SearchScreen(Screen[None]):
             return self._deck.count_of(card.oracle_id)
         return 0
 
+    # tag → group name (case-insensitive); extend here to add more routes
+    _TAG_ROUTES: list[tuple[str, str]] = [
+        ("ramp", "ramp"),
+        ("draw", "draw"),
+        ("removal", "interaction"),
+    ]
+
     def _route_groups(self, card: Card) -> list[Group]:
         """Return groups the card should auto-route into based on type/tags."""
         name_map = {g.name.lower(): g for g in self._deck.groups}
@@ -402,10 +409,10 @@ class SearchScreen(Screen[None]):
         if any("land" in face.lower() for face in card.type_line.split(" // ")):
             if "lands" in name_map:
                 targets.append(name_map["lands"])
-        if any("ramp" in t for t in tags) and "ramp" in name_map:
-            targets.append(name_map["ramp"])
-        if any("draw" in t for t in tags) and "draw" in name_map:
-            targets.append(name_map["draw"])
+
+        for tag, group in self._TAG_ROUTES:
+            if tag in tags and group in name_map:
+                targets.append(name_map[group])
 
         return targets
 
