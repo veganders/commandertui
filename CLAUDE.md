@@ -250,13 +250,18 @@ When the user types `otag:` in the search input, a suggestion dropdown appears b
 
 - **`_otag_context(value, pos) -> tuple[int, int, str] | None`** — scans left from cursor to find the current token, checks for `otag:` prefix (with optional leading `-`), handles both quoted (`otag:"card draw`) and unquoted (`otag:ramp`) forms. Returns `(token_start, token_end, partial)` or `None` if not in an otag token or the token is already complete (closing `"` present).
 
-- **`_update_suggestions(value, pos)`** — called from `on_input_changed`. Filters `_all_tags` by the partial string, populates the `#srch-suggest` ListView, and sets `margin-left` to align the dropdown with the token position. Hides when no matches or not in otag context.
+- **`_update_suggestions(value, pos)`** — called from `on_input_changed`. Filters `_all_tags` by the partial string, populates the `#srch-suggest` ListView, sets `margin-left` to align the dropdown with the token position, and sets `sugg.index = 0` so the first item is pre-highlighted. Hides when no matches or not in otag context.
 
 - **`_apply_suggestion(tag)`** — replaces the typed partial with the completed tag. `inp.replace(text, start, end)` uses **exclusive** `end` (Python slice semantics: `value[end:]` is the preserved tail). So `replace_end = token_end` (no closing quote) or `replace_end = token_end + 1` (consume auto-paired closing `"`).
 
 - Tags with spaces are wrapped in quotes: `otag:"card draw"`. Tags without spaces are unquoted: `otag:ramp`.
 
-- `#srch-suggest` ListView is positioned below the search bar (not inline). Navigation: `down` from input focuses the list; `up` from index 0 or `escape` returns focus to input.
+- `#srch-suggest` ListView is positioned below the search bar (not inline). Navigation while suggestions are visible (focus stays in input throughout):
+  - `enter` — apply the currently highlighted suggestion
+  - `tab` — cycle highlight forward (wraps around)
+  - `shift+tab` — cycle highlight backward (wraps around)
+  - `escape` — close the dropdown
+  Both `tab` and `shift+tab` use `event.stop()` to suppress Textual's default focus-cycling behaviour.
 
 ---
 

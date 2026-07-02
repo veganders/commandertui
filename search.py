@@ -155,9 +155,22 @@ class SearchScreen(Screen[None]):
 
         if sugg.display:
             if self.focused is inp:
-                if event.key == "down":
-                    sugg.focus()
-                    sugg.index = 0
+                if event.key == "enter":
+                    idx = sugg.index if sugg.index is not None else 0
+                    if 0 <= idx < len(self._suggest_matches):
+                        self._apply_suggestion(self._suggest_matches[idx])
+                    event.stop()
+                    return
+                if event.key == "tab":
+                    if self._suggest_matches:
+                        current = sugg.index if sugg.index is not None else -1
+                        sugg.index = (current + 1) % len(self._suggest_matches)
+                    event.stop()
+                    return
+                if event.key == "shift+tab":
+                    if self._suggest_matches:
+                        current = sugg.index if sugg.index is not None else 0
+                        sugg.index = (current - 1) % len(self._suggest_matches)
                     event.stop()
                     return
                 if event.key == "escape":
@@ -272,6 +285,7 @@ class SearchScreen(Screen[None]):
         # Align left edge with the 'otag:' token (+2: srch-bar padding + input padding)
         sugg.styles.margin = (0, 0, 0, min(token_start + 2, 24))
         sugg.display = True
+        sugg.index = 0
 
     def _apply_suggestion(self, tag: str) -> None:
         inp = self.query_one("#srch-input", _SmartInput)
