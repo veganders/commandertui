@@ -76,10 +76,12 @@ class Printing:
     collector_number: str
     finish: str
     prices: dict[str, float]  # source -> price, e.g. {"usd": 0.31, "eur": 0.29}
+    scryfall_id: str = ""
 
 
 def _extract_printings(raw: dict) -> list[Printing]:
     raw_prices = raw.get("prices", {})
+    scryfall_id = raw.get("id", "")
     printings = []
     for finish in raw.get("finishes", ["nonfoil"]):
         suffix = _FINISH_SUFFIX.get(finish, "")
@@ -94,6 +96,7 @@ def _extract_printings(raw: dict) -> list[Printing]:
             collector_number=raw.get("collector_number", ""),
             finish=finish,
             prices=prices,
+            scryfall_id=scryfall_id,
         ))
     return printings
 

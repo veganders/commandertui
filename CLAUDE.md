@@ -230,6 +230,7 @@ Save format:
 | `m` | On a card leaf: toggle maybeboard status (adds/removes from the Maybeboard group) |
 | `h` | Open tag histogram screen |
 | `o` | Cycle sort order within groups (Name → MV → Price → Name …) |
+| `ctrl+e` | Export deck (opens exporter picker) |
 | `ctrl+n` | New deck — resets to initial state (five permanent groups, no cards) |
 | `ctrl+s` | Save deck (prompts for name on first save, then saves in place) |
 | `ctrl+o` | Open saved deck (shows list sorted by most-recently-modified) |
@@ -321,6 +322,53 @@ A card is in the maybeboard when it belongs to the `"Maybeboard"` group (constan
 `m` in the main tree toggles maybeboard on the focused card. `m` in the search screen adds a card to the maybeboard if not already there, or removes it if it is (toggle). In the search screen, `[M]` is checked before `count` so maybeboard cards never incorrectly show `[+]`.
 
 Maybeboard cards are stored in the JSON save format like any other card (as a group membership), so save/load requires no special handling.
+
+---
+
+## Export system
+
+`ctrl+e` opens `ExportModal` (in `widgets.py`) — a list picker that dismisses with the chosen `DeckExporter`. The app calls `exporter.export(deck)` and shows a notification with the exporter name on success, or an error notification on failure.
+
+### Adding a new exporter
+
+1. Create a new file (e.g. `moxfield.py`) with a class that extends `DeckExporter` from `exporter.py`.
+2. Implement the two abstract members:
+   ```python
+   @property
+   def name(self) -> str: return "My Exporter"
+   def export(self, deck: Deck) -> None: ...
+   ```
+3. Add an instance to `_EXPORTERS` in `app.py`.
+
+### Existing exporters
+
+**`ArchidektExporter`** (`archidekt.py`) — builds an Archidekt sandbox URL and opens it in the default browser.
+
+URL format: `https://archidekt.com/sandbox?deck=[{...}, ...]`
+
+Each card entry is `{"c": category, "f": finish, "q": count, "u": scryfall_id}`:
+- `c`: `"c"` for commander/partner, `"m"` for main deck, `"s"` for maybeboard (maps to sideboard in the sandbox, excluded from price)
+- `f`: `0` for nonfoil, `1` for foil/etched (Archidekt treats any non-zero as foil)
+- `u`: `Printing.scryfall_id` — the printing-specific Scryfall card ID (stored on `Printing` as `scryfall_id`, populated from `raw["id"]` at load time). Cards with no printing or missing `scryfall_id` are silently skipped.
+
+**`ClipboardExporter`** (`clipboard.py`) — formats a text decklist and copies it via `pyperclip` (cross-platform; uses `xclip`/`xsel`/`wl-clipboard` on Linux, `pbcopy` on macOS, win32 on Windows).
+
+Decklist format:
+```
+Commander
+1 Atraxa, Praetors' Voice
+
+Deck
+1 Sol Ring
+...
+
+Maybeboard
+1 Some Card
+```
+
+### `Printing.scryfall_id`
+
+Added to the `Printing` dataclass in `db.py`. All `Printing` objects created from the same Scryfall card entry share the same `scryfall_id` (one entry expands into multiple `Printing` objects, one per finish). The `f` field in the Archidekt URL distinguishes finishes.
 
 ---
 

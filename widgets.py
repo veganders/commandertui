@@ -16,6 +16,7 @@ from textual.widget import Widget
 from textual.widgets import Input, Label, ListItem, ListView, Select, Static
 
 from db import Card, CardDB
+from exporter import DeckExporter
 from models import Deck, Group
 from settings import Settings
 
@@ -319,6 +320,67 @@ class CardGroupEditorScreen(ModalScreen[None]):
                 self.dismiss(None)
             else:
                 self._rebuild_list()
+
+
+# ── ExportModal ───────────────────────────────────────────────────────────────
+
+class ExportModal(ModalScreen[Optional[DeckExporter]]):
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+        Binding("enter", "select_exporter", "Export"),
+    ]
+
+    CSS = """
+    ExportModal {
+        align: center middle;
+        background: $background 60%;
+    }
+    #em-box {
+        width: 44;
+        height: auto;
+        background: $surface;
+        border: solid $primary;
+        padding: 1 2;
+    }
+    #em-list {
+        height: auto;
+        max-height: 10;
+        border: none;
+    }
+    """
+
+    def __init__(self, exporters: list[DeckExporter]) -> None:
+        super().__init__()
+        self._exporters = exporters
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="em-box"):
+            yield Label("Export deck:")
+            yield ListView(id="em-list")
+
+    def on_mount(self) -> None:
+        lv = self.query_one("#em-list", ListView)
+        for exporter in self._exporters:
+            lv.append(ListItem(Label(exporter.name)))
+        lv.focus()
+        if self._exporters:
+            lv.index = 0
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def action_select_exporter(self) -> None:
+        lv = self.query_one("#em-list", ListView)
+        idx = lv.index
+        if idx is not None and 0 <= idx < len(self._exporters):
+            self.dismiss(self._exporters[idx])
+        else:
+            self.dismiss(None)
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        idx = event.list_view.index
+        if idx is not None and 0 <= idx < len(self._exporters):
+            self.dismiss(self._exporters[idx])
 
 
 # ── TopBar ─────────────────────────────────────────────────────────────────────

@@ -10,6 +10,8 @@ from textual.containers import Horizontal
 from textual.widgets import Footer, Tree
 
 from rich.text import Text
+from archidekt import ArchidektExporter
+from clipboard import ClipboardExporter
 from db import Card, CardDB, load_db
 from deck_io import list_decks, load_deck, save_deck
 from histogram import TagHistogramScreen
@@ -18,7 +20,9 @@ from partner import partner_mode, partner_filter
 from search import MODE_COMMANDER, MODE_GROUP, MODE_PARTNER, SearchScreen
 from settings import Settings
 from sorting import CardSorter, MVSorter, NameSorter, PriceSorter
-from widgets import CardDetail, CardGroupEditorScreen, DeckNameModal, GroupNameModal, OpenDeckScreen, TopBar
+from widgets import CardDetail, CardGroupEditorScreen, DeckNameModal, ExportModal, GroupNameModal, OpenDeckScreen, TopBar
+
+_EXPORTERS = [ArchidektExporter(), ClipboardExporter()]
 
 
 class DeckbuilderApp(App):
@@ -69,6 +73,7 @@ class DeckbuilderApp(App):
         Binding("h", "show_histogram", "Tag histogram"),
         Binding("o", "cycle_sort", "Sort"),
         Binding("m", "toggle_maybeboard", "Maybeboard"),
+        Binding("ctrl+e", "export_deck", "Export"),
         Binding("ctrl+n", "new_deck", "New"),
         Binding("ctrl+s", "save_deck", "Save"),
         Binding("ctrl+o", "open_deck", "Open"),
@@ -304,6 +309,18 @@ class DeckbuilderApp(App):
             entry.join_group(MAYBEBOARD)
         self._rebuild_tree()
         self.query_one(TopBar).refresh_display()
+
+    def action_export_deck(self) -> None:
+        def on_exporter(exporter) -> None:
+            if exporter is None:
+                return
+            try:
+                exporter.export(self._deck)
+                self.notify(f"Exported: {exporter.name}")
+            except Exception as e:
+                self.notify(str(e), severity="error")
+
+        self.push_screen(ExportModal(_EXPORTERS), callback=on_exporter)
 
     def action_new_deck(self) -> None:
         self._deck.__dict__.update(_fresh_deck().__dict__)
