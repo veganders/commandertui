@@ -9,6 +9,8 @@ from typing import Optional
 
 from db import Card
 
+MAYBEBOARD = "Maybeboard"
+
 
 class CardRole(Enum):
     MAIN = auto()
@@ -32,6 +34,9 @@ class CardEntry:
 
     def leave_group(self, name: str) -> None:
         self.groups.discard(name)
+
+    def is_maybe(self) -> bool:
+        return MAYBEBOARD in self.groups
 
     def price(self, currency: str) -> float | None:
         if not self.card.printings or not (0 <= self.printing_idx < len(self.card.printings)):
@@ -104,7 +109,7 @@ class Deck:
                 result.append(entry)
                 seen.add(entry.card.oracle_id)
         for entry in self.entries.values():
-            if entry.card.oracle_id not in seen:
+            if entry.card.oracle_id not in seen and not entry.is_maybe():
                 result.append(entry)
                 seen.add(entry.card.oracle_id)
         return result

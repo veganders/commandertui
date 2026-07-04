@@ -13,7 +13,7 @@ from textual.widgets import Input, Label, ListItem, ListView
 
 from rich.text import Text
 from db import And, Atom, Card, CardDB, Not, parse_query
-from models import CardEntry, CardRole, Deck, Group
+from models import MAYBEBOARD, CardEntry, CardRole, Deck, Group
 from partner import partner_mode, partner_filter
 from settings import Settings
 from widgets import CardDetail
@@ -46,10 +46,11 @@ class _SmartInput(Input):
         event.stop()
 
 
-class SearchScreen(Screen[None]):
+class SearchScreen(Screen[str]):
     BINDINGS = [
         Binding("escape", "dismiss_screen", "Close"),
         Binding("space", "toggle_card", "Add/Remove"),
+        Binding("m", "toggle_maybeboard", "Maybeboard"),
         Binding("+", "increment_card", "+1"),
         Binding("-", "decrement_card", "-1"),
     ]
@@ -87,6 +88,7 @@ class SearchScreen(Screen[None]):
         group: Optional[Group] = None,
         post_filter: Optional[Callable[[Card], bool]] = None,
         title: Optional[str] = None,
+        initial_query: str = "",
     ) -> None:
         super().__init__()
         self._db = db
@@ -96,6 +98,7 @@ class SearchScreen(Screen[None]):
         self._group = group
         self._post_filter = post_filter
         self._title = title
+        self._initial_query = initial_query
         self._results: list[Card] = []
         self._current_card: Optional[Card] = None
         self._search_timer = None
@@ -125,8 +128,12 @@ class SearchScreen(Screen[None]):
 
     def on_mount(self) -> None:
         self._all_tags = sorted({t for tags in self._db.tags.values() for t in tags})
-        self._run_search("")
-        self.query_one("#srch-input", _SmartInput).focus()
+        inp = self.query_one("#srch-input", _SmartInput)
+        if self._initial_query:
+            inp.value = self._initial_query
+            inp.cursor_position = len(self._initial_query)
+        self._run_search(self._initial_query)
+        inp.focus()
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id != "srch-input":
@@ -359,9 +366,12 @@ class SearchScreen(Screen[None]):
         lv.clear()
         currency = self._settings.currency
         for card in self._results:
-            count = self._card_count(card)
+            maybe = self._is_maybe(card)
+            count = 0 if maybe else self._card_count(card)
             base = card.display_label(currency, self._deck.get_printing_idx(card, currency))
-            if count:
+            if maybe:
+                item = ListItem(Label(Text(" [M] ") + base), classes="result-selected")
+            elif count:
                 pfx = Text(f"[{count}] " if count > 1 else " [+] ")
                 item = ListItem(Label(pfx + base), classes="result-selected")
             else:
@@ -386,11 +396,15 @@ class SearchScreen(Screen[None]):
         for i, card in changed.items():
             if i >= len(items):
                 continue
-            count = self._card_count(card)
+            maybe = self._is_maybe(card)
+            count = 0 if maybe else self._card_count(card)
             base = card.display_label(currency, self._deck.get_printing_idx(card, currency))
             item = items[i]
             label = item.query_one(Label)
-            if count:
+            if maybe:
+                label.update(Text(" [M] ") + base)
+                item.add_class("result-selected")
+            elif count:
                 pfx = Text(f"[{count}] " if count > 1 else " [+] ")
                 label.update(pfx + base)
                 item.add_class("result-selected")
@@ -406,6 +420,10 @@ class SearchScreen(Screen[None]):
         if self._mode == MODE_GROUP:
             return self._deck.count_of(card.oracle_id)
         return 0
+
+    def _is_maybe(self, card: Card) -> bool:
+        entry = self._deck.get_entry(card.oracle_id)
+        return entry is not None and entry.is_maybe()
 
     # tag → group name (case-insensitive); extend here to add more routes
     _TAG_ROUTES: list[tuple[str, str]] = [
@@ -433,7 +451,7 @@ class SearchScreen(Screen[None]):
     # ── actions ────────────────────────────────────────────────────────────────
 
     def action_dismiss_screen(self) -> None:
-        self.dismiss(None)
+        self.dismiss(self.query_one("#srch-input", _SmartInput).value)
 
     def action_toggle_card(self) -> None:
         if isinstance(self.focused, Input) or self._current_card is None:
@@ -500,3 +518,21 @@ class SearchScreen(Screen[None]):
             if self._deck.count_of(card.oracle_id) > 0:
                 self._deck.remove_one(card.oracle_id)
                 self._refresh_results_for(card.oracle_id)
+
+    def action_toggle_maybeboard(self) -> None:
+        if isinstance(self.focused, Input) or self._current_card is None:
+            return
+        if self._mode != MODE_GROUP:
+            return
+        card = self._current_card
+        entry = self._deck.get_entry(card.oracle_id)
+        if entry is None:
+            # Card not in deck yet — add it directly to maybeboard
+            self._deck.add(card)
+            entry = self._deck.get_entry(card.oracle_id)
+        if entry is not None:
+            if entry.is_maybe():
+                entry.leave_group(MAYBEBOARD)
+            else:
+                entry.join_group(MAYBEBOARD)
+        self._refresh_results_for(card.oracle_id)

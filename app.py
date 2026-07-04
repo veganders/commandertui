@@ -13,7 +13,7 @@ from rich.text import Text
 from db import Card, CardDB, load_db
 from deck_io import list_decks, load_deck, save_deck
 from histogram import TagHistogramScreen
-from models import CardEntry, CardRole, Deck, Group
+from models import MAYBEBOARD, CardEntry, CardRole, Deck, Group
 from partner import partner_mode, partner_filter
 from search import MODE_COMMANDER, MODE_GROUP, MODE_PARTNER, SearchScreen
 from settings import Settings
@@ -68,6 +68,7 @@ class DeckbuilderApp(App):
         Binding("e", "edit_card_groups", "Edit groups"),
         Binding("h", "show_histogram", "Tag histogram"),
         Binding("o", "cycle_sort", "Sort"),
+        Binding("m", "toggle_maybeboard", "Maybeboard"),
         Binding("ctrl+n", "new_deck", "New"),
         Binding("ctrl+s", "save_deck", "Save"),
         Binding("ctrl+o", "open_deck", "Open"),
@@ -82,6 +83,7 @@ class DeckbuilderApp(App):
         self._settings = settings
         self._current_card: Optional[Card] = None
         self._sort_idx: int = 0
+        self._last_search_query: str = ""
 
     def _sorters(self) -> list[CardSorter]:
         return [NameSorter(), MVSorter(), PriceSorter(self._settings.currency)]
@@ -118,7 +120,11 @@ class DeckbuilderApp(App):
                     cmd_node.add_leaf(base, data=entry.card)
 
         for group in self._deck.groups:
-            entries = sorted(self._deck.entries_for_group(group.name), key=sorter.key)
+            raw = self._deck.entries_for_group(group.name)
+            entries = sorted(
+                raw if group.name == MAYBEBOARD else [e for e in raw if not e.is_maybe()],
+                key=sorter.key,
+            )
             total = sum(e.count for e in entries)
             node = tree.root.add(f"{group.name}  ({total})", expand=True, data=group)
             for entry in entries:
@@ -126,7 +132,10 @@ class DeckbuilderApp(App):
                 label = Text(f"[{entry.count}] ") + base if entry.count > 1 else base
                 node.add_leaf(label, data=entry.card)
 
-        uncategorized = sorted(self._deck.uncategorized_entries(), key=sorter.key)
+        uncategorized = sorted(
+            [e for e in self._deck.uncategorized_entries() if not e.is_maybe()],
+            key=sorter.key,
+        )
         if uncategorized:
             total = sum(e.count for e in uncategorized)
             node = tree.root.add(f"Uncategorized  ({total})", expand=True, data=None)
@@ -136,6 +145,13 @@ class DeckbuilderApp(App):
                 node.add_leaf(label, data=entry.card)
 
         tree.root.expand()
+        self.call_after_refresh(self._sync_detail_to_cursor)
+
+    def _sync_detail_to_cursor(self) -> None:
+        node = self.query_one("#groups", Tree).cursor_node
+        card = node.data if node and isinstance(node.data, Card) else None
+        self._current_card = card
+        self.query_one(CardDetail).show_card(card, self._db, self._deck, self._settings)
 
     def _group_for_cursor(self) -> Optional[Group]:
         node = self.query_one("#groups", Tree).cursor_node
@@ -182,7 +198,9 @@ class DeckbuilderApp(App):
         post_filter: Optional[Callable[[Card], bool]] = None,
         title: Optional[str] = None,
     ) -> None:
-        def on_done(_) -> None:
+        def on_done(query: str) -> None:
+            if mode == MODE_GROUP:
+                self._last_search_query = query or ""
             self._rebuild_tree()
             self.query_one(TopBar).refresh_display()
 
@@ -190,6 +208,7 @@ class DeckbuilderApp(App):
             SearchScreen(
                 self._db, self._deck, self._settings, mode,
                 group=group, post_filter=post_filter, title=title,
+                initial_query=self._last_search_query if mode == MODE_GROUP else "",
             ),
             callback=on_done,
         )
@@ -267,10 +286,24 @@ class DeckbuilderApp(App):
                 self._deck.commander is not None
                 and partner_mode(self._deck.commander.card) is not None
             )
-        if action == "edit_card_groups":
+        if action in ("edit_card_groups", "toggle_maybeboard"):
             node = self.query_one("#groups", Tree).cursor_node
             return node is not None and isinstance(node.data, Card)
         return True
+
+    def action_toggle_maybeboard(self) -> None:
+        node = self.query_one("#groups", Tree).cursor_node
+        if node is None or not isinstance(node.data, Card):
+            return
+        entry = self._deck.get_entry(node.data.oracle_id)
+        if entry is None:
+            return
+        if entry.is_maybe():
+            entry.leave_group(MAYBEBOARD)
+        else:
+            entry.join_group(MAYBEBOARD)
+        self._rebuild_tree()
+        self.query_one(TopBar).refresh_display()
 
     def action_new_deck(self) -> None:
         self._deck.__dict__.update(_fresh_deck().__dict__)
@@ -305,6 +338,7 @@ class DeckbuilderApp(App):
             if path is None:
                 return
             self._deck.__dict__.update(load_deck(path, self._db).__dict__)
+            _ensure_permanent_groups(self._deck)
             self._rebuild_tree()
             self.query_one(TopBar).refresh_display()
             self.notify(f"Opened: {self._deck.name or path.stem}")
@@ -359,8 +393,17 @@ def _fresh_deck() -> Deck:
             Group("Draw", permanent=True),
             Group("Interaction", permanent=True),
             Group("Lands", permanent=True),
+            Group(MAYBEBOARD, permanent=True),
         ],
     )
+
+
+def _ensure_permanent_groups(deck: Deck) -> None:
+    """Add any permanent groups from _fresh_deck that are missing (e.g. after loading an older save)."""
+    existing = {g.name for g in deck.groups}
+    for group in _fresh_deck().groups:
+        if group.name not in existing:
+            deck.groups.append(group)
 
 
 if __name__ == "__main__":

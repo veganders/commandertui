@@ -66,6 +66,8 @@ Use this in both the top bar rendering (show/hide the label) and the `action_sea
 
 `Card.allows_multiple() -> bool` lives on the `Card` class in `db.py`. It returns True for basic lands (`"Basic" in type_line`) and cards whose oracle text contains `"a deck can have any number of cards named"`. Do not duplicate this check elsewhere.
 
+`_SPLIT_LAYOUTS` in `db.py` lists layouts where `oracle_text` and `mana_cost` live inside `card_faces` rather than at the top level. Currently: `transform`, `modal_dfc`, `flip`, `split`, `adventure`, `battle`, `prepare`. When Scryfall introduces a new multi-face layout and cards show empty oracle text, add it here.
+
 `Card.display_label(currency, printing_idx) -> rich.text.Text` returns a formatted label: `[mana cost] Name [EUR: 1.23]`. For multi-face cards with mana costs on multiple faces it renders `[1R] Fire // [1U] Ice [EUR: 0.50]`. Returns a `Text` object (not a string) so brackets are always literal, never parsed as Rich markup.
 
 ### CardRole / CardEntry / Group / Deck
@@ -85,7 +87,7 @@ class CardEntry:
     groups: set[str] = field(default_factory=set)
     printing_idx: int = 0          # index into card.printings; stored here, not in a separate dict
     role: CardRole = CardRole.MAIN
-    # helpers: in_group(name), join_group(name), leave_group(name)
+    # helpers: in_group(name), join_group(name), leave_group(name), is_maybe()
     # method:  price(currency: str) -> float | None
 
 @dataclass
@@ -114,7 +116,7 @@ class Deck:
 
 Key `Deck` helpers: `add(card)`, `remove_one(oracle_id)`, `remove_all(oracle_id)`, `count_of(oracle_id)`, `get_entry(oracle_id)`, `get_entry_for_card(oracle_id)`, `entries_for_group(name)`, `uncategorized_entries()`.
 
-`Deck.all_entries() -> list[CardEntry]` returns commander + partner + all entries, deduped by oracle_id. `card_count()`, `mana_curve()`, and `total_cost()` all use this. `total_cost` uses `entry.price(currency)` directly.
+`Deck.all_entries() -> list[CardEntry]` returns commander + partner + all non-maybeboard entries, deduped by oracle_id. `card_count()`, `mana_curve()`, and `total_cost()` all use this, so maybeboard cards are automatically excluded from all three. `total_cost` uses `entry.price(currency)` directly.
 
 Mana curve excludes cards where every face is a land (`all("Land" in face for face in type_line.split(" // "))`). MDFCs with a non-land face (e.g. `"Sorcery // Land"`) are included.
 
@@ -209,7 +211,7 @@ Save format:
 
 `_printing_dict(entry)` takes a `CardEntry` and serialises its `printing_idx` to `{set_code, collector_number, finish}`. `_find_printing_idx(card, printing_data)` is the inverse — scans `card.printings` and returns the matching index (0 if not found).
 
-`load_deck(path, db)` returns a new `Deck` with commander/partner as `CardEntry(role=CardRole.COMMANDER/PARTNER)`. In `app.py`, `action_open_deck` mutates `self._deck` in-place (copies all fields) so `TopBar` and other live widget references stay valid without needing updates.
+`load_deck(path, db)` returns a new `Deck` with commander/partner as `CardEntry(role=CardRole.COMMANDER/PARTNER)`. In `app.py`, `action_open_deck` mutates `self._deck` in-place (copies all fields) so `TopBar` and other live widget references stay valid without needing updates. After loading, `_ensure_permanent_groups(deck)` is called to add any permanent groups missing from older saves (e.g. Maybeboard added after the deck was created).
 
 `Deck.name` and `Deck.save_path` are set after the first save or after opening a file. Subsequent `ctrl+s` saves skip the name prompt and write directly to `save_path`.
 
@@ -225,9 +227,10 @@ Save format:
 | `g` | Create a new group (prompts for name via `GroupNameModal`) |
 | `d` | On a card leaf: remove card entirely. On a group: remove group memberships + delete group (permanent groups: clear memberships only). |
 | `e` | On a card leaf: open `CardGroupEditorScreen` to toggle group memberships and adjust count |
+| `m` | On a card leaf: toggle maybeboard status (adds/removes from the Maybeboard group) |
 | `h` | Open tag histogram screen |
 | `o` | Cycle sort order within groups (Name → MV → Price → Name …) |
-| `ctrl+n` | New deck — resets to initial state (four permanent groups, no cards) |
+| `ctrl+n` | New deck — resets to initial state (five permanent groups, no cards) |
 | `ctrl+s` | Save deck (prompts for name on first save, then saves in place) |
 | `ctrl+o` | Open saved deck (shows list sorted by most-recently-modified) |
 | `+` | Increment copy count for the focused card (only if `card.allows_multiple()`) |
@@ -265,6 +268,14 @@ When the user types `otag:` in the search input, a suggestion dropdown appears b
 
 ---
 
+## Search screen (`search.py`) — misc
+
+`SearchScreen` is typed `Screen[str]` and dismisses with the current query string. `DeckbuilderApp` stores this in `_last_search_query` and passes it back as `initial_query` the next time the group search screen is opened, so the query is remembered for the session. Commander and partner searches always open with an empty query.
+
+`_sync_detail_to_cursor()` is called via `call_after_refresh` at the end of every `_rebuild_tree()`. This ensures the `CardDetail` panel always reflects the actual cursor position after a rebuild — Textual's `NodeHighlighted` event does not re-fire when the cursor index is unchanged but a different card is now at that position (e.g. after a card moves to another group).
+
+---
+
 ## CardDetail printing select (`widgets.py`)
 
 The printing `Select` in `CardDetail` encodes both the oracle_id and the printing index in the option value using a `_PrintingKey(oracle_id, idx)` NamedTuple. This means `on_select_changed` is entirely self-contained — it reads `event.value.oracle_id` and `event.value.idx` directly rather than relying on any widget-level mutable state.
@@ -298,20 +309,18 @@ Commander/partner nodes are not sorted (they're always shown first, in commander
 
 ---
 
-## Maybeboard (pending implementation)
+## Maybeboard
 
-**Design decision not yet made.** Two options discussed:
+A card is in the maybeboard when it belongs to the `"Maybeboard"` group (constant `MAYBEBOARD` in `models.py`). The Maybeboard group is a permanent group added to every new deck and injected into older loaded decks via `_ensure_permanent_groups`.
 
-**Option A — separate `Deck.maybeboard: dict[str, CardEntry]`**: completely separate from `entries`. All existing methods (`all_entries`, `entries_for_group`, etc.) naturally exclude maybeboard with zero filtering. Simple, but only one maybeboard.
+`CardEntry.is_maybe() -> bool` returns `MAYBEBOARD in self.groups`. This is the single check used everywhere:
+- `Deck.all_entries()` excludes `is_maybe()` entries → `card_count`, `mana_curve`, `total_cost` automatically exclude maybeboard cards.
+- `_rebuild_tree()` filters `is_maybe()` entries from all non-Maybeboard group nodes (and from Uncategorized).
+- Search screen shows `[M]` prefix instead of `[+]` for maybeboard cards; `[M]` takes priority over count in the display logic.
 
-**Option B — `Group.maybeboard: bool` flag**: multiple maybeboard groups. A card is "in maybeboard" if any of its `entry.groups` names a maybeboard group. Requires filtering in `all_entries()` and in `_rebuild_tree` (to suppress maybeboard cards from non-maybeboard groups). Reuses existing group infrastructure.
+`m` in the main tree toggles maybeboard on the focused card. `m` in the search screen adds a card to the maybeboard if not already there, or removes it if it is (toggle). In the search screen, `[M]` is checked before `count` so maybeboard cards never incorrectly show `[+]`.
 
-**Requirements agreed:**
-- Maybeboard cards do not count toward `card_count`, mana curve, or `total_cost`.
-- Maybeboard cards do not appear under regular groups even if auto-routing would place them there.
-- Multiple maybeboard-style lists would be useful (e.g. "Considering", "Sideboard").
-
-Option B is preferred if implemented; update `Group`, `Deck.all_entries()`, `_rebuild_tree`, `deck_io.py` save format, and search screen `[M]` indicator.
+Maybeboard cards are stored in the JSON save format like any other card (as a group membership), so save/load requires no special handling.
 
 ---
 

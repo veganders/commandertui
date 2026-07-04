@@ -10,7 +10,7 @@ from typing import Optional, Union
 DATA_DIR = Path(__file__).parent / "data"
 
 # Layouts where oracle_text and mana_cost live inside card_faces, not at top level.
-_SPLIT_LAYOUTS = {"transform", "modal_dfc", "flip", "split", "adventure", "battle"}
+_SPLIT_LAYOUTS = {"transform", "modal_dfc", "flip", "split", "adventure", "battle", "prepare"}
 
 
 @dataclass
