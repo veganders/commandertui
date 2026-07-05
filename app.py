@@ -6,21 +6,20 @@ from typing import Callable, Optional
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal
-from textual.widgets import Footer, Tree
+from textual.containers import Horizontal, Vertical
+from textual.widgets import Footer, Input, ListView, Tree
 
 from rich.text import Text
 from archidekt import ArchidektExporter
 from clipboard import ClipboardExporter
-from db import Card, CardDB, load_db
+from db import Card, CardDB, load_db, parse_query
 from deck_io import list_decks, load_deck, save_deck
-from histogram import TagHistogramScreen
 from models import MAYBEBOARD, CardEntry, CardRole, Deck, Group
 from partner import partner_mode, partner_filter
 from search import MODE_COMMANDER, MODE_GROUP, MODE_PARTNER, SearchScreen
 from settings import Settings
 from sorting import CardSorter, MVSorter, NameSorter, PriceSorter
-from widgets import CardDetail, CardGroupEditorScreen, DeckNameModal, ExportModal, GroupNameModal, OpenDeckScreen, TopBar
+from widgets import CardDetail, CardGroupEditorScreen, DeckNameModal, ExportModal, GroupNameModal, OtagSuggestions, OpenDeckScreen, QueryInput, TopBar
 
 _EXPORTERS = [ArchidektExporter(), ClipboardExporter()]
 
@@ -36,7 +35,19 @@ class DeckbuilderApp(App):
     #tb-info { width: 1fr; height: 100%; }
     #tb-right { width: 36; height: 100%; }
     #bottom { height: 1fr; }
-    #groups { width: 1fr; border-right: solid $primary; }
+    #groups-panel { width: 1fr; border-right: solid $primary; }
+    #deck-search { width: 1fr; }
+    #deck-suggest {
+        display: none;
+        height: auto;
+        max-height: 10;
+        width: 44;
+        background: $surface;
+        border: solid $primary;
+    }
+    QueryInput.query-error { background: $error 25%; }
+    QueryInput.query-error:focus { background: $error 35%; }
+    #groups { width: 1fr; }
     CardDetail { width: 1fr; padding: 1 2; }
     #cd-printing-label { margin-top: 1; color: $text-muted; }
 
@@ -47,6 +58,16 @@ class DeckbuilderApp(App):
         background: $surface;
     }
     Input:focus {
+        border: none;
+        background: $panel;
+    }
+    QueryInput {
+        border: none;
+        height: 1;
+        padding: 0 1;
+        background: $surface;
+    }
+    QueryInput:focus {
         border: none;
         background: $panel;
     }
@@ -65,12 +86,12 @@ class DeckbuilderApp(App):
     BINDINGS = [
         Binding("q", "quit", "Quit"),
         Binding("s", "search_cards", "Search"),
+        Binding("S", "focus_deck_filter", "Filter"),
         Binding("c", "search_commander", "Commander"),
         Binding("p", "search_partner", "Partner"),
         Binding("g", "create_group", "New group"),
         Binding("d", "delete_node", "Delete"),
         Binding("e", "edit_card_groups", "Edit groups"),
-        Binding("h", "show_histogram", "Tag histogram"),
         Binding("o", "cycle_sort", "Sort"),
         Binding("m", "toggle_maybeboard", "Maybeboard"),
         Binding("ctrl+e", "export_deck", "Export"),
@@ -89,6 +110,8 @@ class DeckbuilderApp(App):
         self._current_card: Optional[Card] = None
         self._sort_idx: int = 0
         self._last_search_query: str = ""
+        self._deck_filter: str = ""
+        self._deck_suggestions: Optional[OtagSuggestions] = None
 
     def _sorters(self) -> list[CardSorter]:
         return [NameSorter(), MVSorter(), PriceSorter(self._settings.currency)]
@@ -100,13 +123,61 @@ class DeckbuilderApp(App):
     def compose(self) -> ComposeResult:
         yield TopBar(self._deck, self._settings)
         with Horizontal(id="bottom"):
-            yield Tree("Groups", id="groups")
+            with Vertical(id="groups-panel"):
+                yield QueryInput(placeholder="Filter deck…", id="deck-search", delay=0.4)
+                yield ListView(id="deck-suggest")
+                yield Tree("Groups", id="groups")
             yield CardDetail()
         yield Footer()
 
     def on_mount(self) -> None:
         self._rebuild_tree()
         self.query_one("#groups", Tree).focus()
+        tags = sorted({t for tag_list in self._db.tags.values() for t in tag_list})
+        self._deck_suggestions = OtagSuggestions(self, "#deck-search", "#deck-suggest", tags)
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id != "deck-search" or self._deck_suggestions is None:
+            return
+        self._deck_suggestions.update(event.input.value, event.input.cursor_position)
+
+    def on_key(self, event) -> None:
+        if self._deck_suggestions is None or not self._deck_suggestions.visible:
+            return
+        inp = self.query_one("#deck-search", QueryInput)
+        if self.focused is not inp:
+            return
+        if event.key == "enter":
+            tag = self._deck_suggestions.current_tag()
+            if tag:
+                self._deck_suggestions.apply(tag)
+            event.stop()
+        elif event.key == "tab":
+            self._deck_suggestions.navigate(+1)
+            event.stop()
+        elif event.key == "shift+tab":
+            self._deck_suggestions.navigate(-1)
+            event.stop()
+        elif event.key == "escape":
+            self._deck_suggestions.hide()
+            event.stop()
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        if event.list_view.id != "deck-suggest" or self._deck_suggestions is None:
+            return
+        tag = self._deck_suggestions.current_tag()
+        if tag:
+            self._deck_suggestions.apply(tag)
+        event.stop()
+
+    def on_query_input_debounced(self, event: QueryInput.Debounced) -> None:
+        if event.input.id != "deck-search":
+            return
+        self._deck_filter = event.value
+        self._rebuild_tree()
+
+    def action_focus_deck_filter(self) -> None:
+        self.query_one("#deck-search", QueryInput).focus()
 
     # ── tree ───────────────────────────────────────────────────────────────────
 
@@ -116,20 +187,29 @@ class DeckbuilderApp(App):
         currency = self._settings.currency
         sorter = self._current_sorter()
 
-        if self._deck.commander or self._deck.partner:
+        filter_ids: Optional[set[str]] = None
+        if self._deck_filter.strip():
+            filter_ids = {c.oracle_id for c in self._db.query(parse_query(self._deck_filter))}
+
+        def passes(entry: CardEntry) -> bool:
+            return filter_ids is None or entry.card.oracle_id in filter_ids
+
+        cmd_entries = [e for e in (self._deck.commander, self._deck.partner) if e and passes(e)]
+        if cmd_entries:
             section_label = "Commander / Partner" if self._deck.partner else "Commander"
             cmd_node = tree.root.add(section_label, expand=True, data=None)
-            for entry in (self._deck.commander, self._deck.partner):
-                if entry:
-                    base = entry.card.display_label(currency, entry.printing_idx)
-                    cmd_node.add_leaf(base, data=entry.card)
+            for entry in cmd_entries:
+                base = entry.card.display_label(currency, entry.printing_idx)
+                cmd_node.add_leaf(base, data=entry.card)
 
         for group in self._deck.groups:
             raw = self._deck.entries_for_group(group.name)
             entries = sorted(
-                raw if group.name == MAYBEBOARD else [e for e in raw if not e.is_maybe()],
+                [e for e in raw if passes(e) and (group.name == MAYBEBOARD or not e.is_maybe())],
                 key=sorter.key,
             )
+            if not entries and filter_ids is not None:
+                continue
             total = sum(e.count for e in entries)
             node = tree.root.add(f"{group.name}  ({total})", expand=True, data=group)
             for entry in entries:
@@ -138,7 +218,7 @@ class DeckbuilderApp(App):
                 node.add_leaf(label, data=entry.card)
 
         uncategorized = sorted(
-            [e for e in self._deck.uncategorized_entries() if not e.is_maybe()],
+            [e for e in self._deck.uncategorized_entries() if not e.is_maybe() and passes(e)],
             key=sorter.key,
         )
         if uncategorized:
@@ -230,9 +310,6 @@ class DeckbuilderApp(App):
                 self._deck.groups.append(Group(name=name))
                 self._rebuild_tree()
         self.push_screen(GroupNameModal(), callback=on_name)
-
-    def action_show_histogram(self) -> None:
-        self.push_screen(TagHistogramScreen(self._db, self._deck))
 
     def action_cycle_sort(self) -> None:
         self._sort_idx = (self._sort_idx + 1) % len(self._sorters())

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import Callable, Optional
 
-from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
@@ -16,34 +15,12 @@ from db import And, Atom, Card, CardDB, Not, parse_query, validate_query
 from models import MAYBEBOARD, CardEntry, CardRole, Deck, Group
 from partner import partner_mode, partner_filter
 from settings import Settings
-from widgets import CardDetail
+from widgets import CardDetail, OtagSuggestions, QueryInput
 
 MODE_COMMANDER = "commander"
 MODE_PARTNER = "partner"
 MODE_GROUP = "group"
 
-
-class _SmartInput(Input):
-    """Input that auto-pairs quotes and jumps over existing closing quotes.
-
-    Calls event.prevent_default() to break Textual's MRO dispatch loop so
-    Input._on_key doesn't run a second time and double-insert the character.
-    """
-
-    async def _on_key(self, event: events.Key) -> None:
-        if event.character != '"':
-            await super()._on_key(event)
-            return
-        self._restart_blink()
-        pos = self.cursor_position
-        val = self.value
-        if pos < len(val) and val[pos] == '"':
-            self.cursor_position = pos + 1          # jump over existing closing quote
-        else:
-            self.insert_text_at_cursor('""')        # insert paired quotes
-            self.cursor_position = pos + 1          # cursor between them
-        event.prevent_default()  # stops Input._on_key from running via MRO dispatch
-        event.stop()
 
 
 class SearchScreen(Screen[str]):
@@ -65,8 +42,8 @@ class SearchScreen(Screen[str]):
         align: left middle;
     }
     #srch-input { width: 1fr; }
-    #srch-input.query-error { background: $error 25%; }
-    #srch-input.query-error:focus { background: $error 35%; }
+    QueryInput.query-error { background: $error 25%; }
+    QueryInput.query-error:focus { background: $error 35%; }
     #srch-suggest {
         display: none;
         height: auto;
@@ -103,15 +80,11 @@ class SearchScreen(Screen[str]):
         self._initial_query = initial_query
         self._results: list[Card] = []
         self._current_card: Optional[Card] = None
-        self._search_timer = None
-        self._all_tags: list[str] = []
-        self._suggest_matches: list[str] = []
-        self._suggest_token_start: int = 0
-        self._suggest_token_end: int = 0
+        self._suggestions = OtagSuggestions(self, "#srch-input", "#srch-suggest", [])
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="srch-bar"):
-            yield _SmartInput(placeholder=self._placeholder(), id="srch-input", select_on_focus=False)
+            yield QueryInput(placeholder=self._placeholder(), id="srch-input", select_on_focus=False, delay=1.0)
         yield ListView(id="srch-suggest")
         with Horizontal(id="srch-bottom"):
             yield ListView(id="srch-list")
@@ -129,8 +102,8 @@ class SearchScreen(Screen[str]):
         return base + "  —  t:type  o:oracle  kw:partner  id:wubrg  c:rg  otag:ramp  mv>=3  eur<=1  -t:land"
 
     def on_mount(self) -> None:
-        self._all_tags = sorted({t for tags in self._db.tags.values() for t in tags})
-        inp = self.query_one("#srch-input", _SmartInput)
+        self._suggestions.tags = sorted({t for tags in self._db.tags.values() for t in tags})
+        inp = self.query_one("#srch-input", QueryInput)
         if self._initial_query:
             inp.value = self._initial_query
             inp.cursor_position = len(self._initial_query)
@@ -140,66 +113,46 @@ class SearchScreen(Screen[str]):
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id != "srch-input":
             return
-        inp = event.input
-        # Read value and cursor together so they're consistent with each other.
-        val = inp.value
-        pos = inp.cursor_position
-        self._update_suggestions(val, pos)
-        if self._search_timer is not None:
-            self._search_timer.stop()
-        self._search_timer = self.set_timer(1.0, lambda: self._run_search(val))
+        self._suggestions.update(event.input.value, event.input.cursor_position)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id != "srch-input":
             return
-        self.query_one("#srch-suggest", ListView).display = False
-        if self._search_timer is not None:
-            self._search_timer.stop()
-            self._search_timer = None
+        self._suggestions.hide()
+
+    def on_query_input_debounced(self, event: QueryInput.Debounced) -> None:
+        if event.input.id != "srch-input":
+            return
+        if event.from_submit:
+            self._suggestions.hide()
         self._run_search(event.value)
 
     def on_key(self, event) -> None:
-        sugg = self.query_one("#srch-suggest", ListView)
-        inp = self.query_one("#srch-input", _SmartInput)
+        inp = self.query_one("#srch-input", QueryInput)
 
-        if sugg.display:
-            if self.focused is inp:
-                if event.key == "enter":
-                    idx = sugg.index if sugg.index is not None else 0
-                    if 0 <= idx < len(self._suggest_matches):
-                        self._apply_suggestion(self._suggest_matches[idx])
-                    event.stop()
-                    return
-                if event.key == "tab":
-                    if self._suggest_matches:
-                        current = sugg.index if sugg.index is not None else -1
-                        sugg.index = (current + 1) % len(self._suggest_matches)
-                    event.stop()
-                    return
-                if event.key == "shift+tab":
-                    if self._suggest_matches:
-                        current = sugg.index if sugg.index is not None else 0
-                        sugg.index = (current - 1) % len(self._suggest_matches)
-                    event.stop()
-                    return
-                if event.key == "escape":
-                    sugg.display = False
-                    event.stop()
-                    return
-            elif self.focused is sugg:
-                if event.key == "escape":
-                    sugg.display = False
-                    inp.focus()
-                    event.stop()
-                    return
-                if event.key == "up" and (sugg.index is None or sugg.index == 0):
-                    inp.focus()
-                    event.stop()
-                    return
+        if self._suggestions.visible and self.focused is inp:
+            if event.key == "enter":
+                tag = self._suggestions.current_tag()
+                if tag:
+                    self._suggestions.apply(tag, self._run_search)
+                event.stop()
+                return
+            if event.key == "tab":
+                self._suggestions.navigate(+1)
+                event.stop()
+                return
+            if event.key == "shift+tab":
+                self._suggestions.navigate(-1)
+                event.stop()
+                return
+            if event.key == "escape":
+                self._suggestions.hide()
+                event.stop()
+                return
 
         # Down/tab from input moves to result list (only when suggestions are hidden)
         if event.key in ("down", "tab") and isinstance(self.focused, Input):
-            if not sugg.display:
+            if not self._suggestions.visible:
                 lv = self.query_one("#srch-list", ListView)
                 lv.focus()
                 if self._results:
@@ -217,9 +170,9 @@ class SearchScreen(Screen[str]):
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         if event.list_view.id != "srch-suggest":
             return
-        idx = event.list_view.index
-        if idx is not None and 0 <= idx < len(self._suggest_matches):
-            self._apply_suggestion(self._suggest_matches[idx])
+        tag = self._suggestions.current_tag()
+        if tag:
+            self._suggestions.apply(tag, self._run_search)
         event.stop()
 
     def on_card_detail_printing_selected(self, msg: CardDetail.PrintingSelected) -> None:
@@ -229,112 +182,10 @@ class SearchScreen(Screen[str]):
         else:
             self._deck.selected_printings[msg.oracle_id] = msg.printing_idx
 
-    # ── autocomplete ───────────────────────────────────────────────────────────
-
-    def _otag_context(self, value: str, pos: int) -> tuple[int, int, str] | None:
-        """If cursor is inside an otag: token, return (token_start, token_end, partial).
-
-        Handles: otag:ramp, -otag:ramp, otag:"card draw (mid-typing), otag:"card draw" (complete).
-        Returns None if not in an otag token or the token already has a closing quote.
-        """
-        before = value[:pos]
-
-        # Find start of current token — last unquoted space before cursor
-        in_quote = False
-        token_start = 0
-        for i, ch in enumerate(before):
-            if ch == '"':
-                in_quote = not in_quote
-            elif ch == ' ' and not in_quote:
-                token_start = i + 1
-
-        token = before[token_start:]
-        stripped = token.lstrip('-')
-        if not stripped.lower().startswith('otag:'):
-            return None
-
-        after_colon = stripped[5:]
-
-        if after_colon.startswith('"'):
-            inner = after_colon[1:]
-            if '"' in inner:
-                return None  # closing quote present — token is complete
-            partial = inner
-        else:
-            partial = after_colon
-
-        return token_start, pos, partial
-
-    def _update_suggestions(self, value: str, pos: int) -> None:
-        sugg = self.query_one("#srch-suggest", ListView)
-        ctx = self._otag_context(value, pos)
-
-        if ctx is None:
-            if sugg.display:
-                sugg.display = False
-            return
-
-        token_start, token_end, partial = ctx
-        partial_lower = partial.lower()
-        matches = [t for t in self._all_tags if partial_lower in t][:12]
-
-        if not matches:
-            if sugg.display:
-                sugg.display = False
-            return
-
-        self._suggest_token_start = token_start
-        self._suggest_token_end = token_end
-        self._suggest_matches = matches
-
-        sugg.clear()
-        for tag in matches:
-            sugg.append(ListItem(Label(tag)))
-
-        # Align left edge with the 'otag:' token (+2: srch-bar padding + input padding)
-        sugg.styles.margin = (0, 0, 0, min(token_start + 2, 24))
-        sugg.display = True
-        sugg.index = 0
-
-    def _apply_suggestion(self, tag: str) -> None:
-        inp = self.query_one("#srch-input", _SmartInput)
-        sugg = self.query_one("#srch-suggest", ListView)
-
-        val = inp.value
-        pos = inp.cursor_position
-
-        # Re-detect so token bounds are fresh (user may have kept typing)
-        ctx = self._otag_context(val, pos)
-        if ctx:
-            token_start, token_end, _ = ctx
-        else:
-            token_start, token_end = self._suggest_token_start, self._suggest_token_end
-
-        # inp.replace() uses exclusive end (Python slice semantics).
-        # token_end is already past the partial — val[token_end:] is the tail to keep.
-        replace_end = token_end
-        if token_end < len(val) and val[token_end] == '"':
-            replace_end = token_end + 1  # also consume the auto-paired closing '"'
-
-        neg = val[token_start:token_start + 1] == '-'
-        pfx = '-otag:' if neg else 'otag:'
-        replacement = f'{pfx}"{tag}"' if ' ' in tag else f'{pfx}{tag}'
-
-        inp.replace(replacement, token_start, replace_end)
-
-        sugg.display = False
-        inp.focus()
-        self._run_search(inp.value)
-
     # ── search ─────────────────────────────────────────────────────────────────
 
     def _run_search(self, query: str) -> None:
         node = parse_query(query)
-        inp = self.query_one("#srch-input", _SmartInput)
-        if validate_query(node):
-            inp.remove_class("query-error")
-        else:
-            inp.add_class("query-error")
         implied = self._implied_node()
         if implied is not None:
             node = And([implied] + (node.children if isinstance(node, And) else [node]))
@@ -458,7 +309,7 @@ class SearchScreen(Screen[str]):
     # ── actions ────────────────────────────────────────────────────────────────
 
     def action_dismiss_screen(self) -> None:
-        self.dismiss(self.query_one("#srch-input", _SmartInput).value)
+        self.dismiss(self.query_one("#srch-input", QueryInput).value)
 
     def action_toggle_card(self) -> None:
         if isinstance(self.focused, Input) or self._current_card is None:

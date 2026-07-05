@@ -178,15 +178,9 @@ Toggling off (space when card is already in deck) removes the card from **all** 
 
 ## Oracle tag leaf vs. ancestor tags
 
-`CardDB.tags[oracle_id]` holds all ancestor-expanded tag labels (used for search and the histogram's "all tags" mode). `CardDB.leaf_tags[oracle_id]` holds only the directly-assigned tags (used for the histogram's "leaf tags" mode). Both are populated at load time in `load_db()`.
+`CardDB.tags[oracle_id]` holds all ancestor-expanded tag labels (used for search). `CardDB.leaf_tags[oracle_id]` holds only the directly-assigned tags. Both are populated at load time in `load_db()`.
 
 `db.get_tags(oracle_id)` returns the expanded list. `db.get_leaf_tags(oracle_id)` returns the leaf list.
-
----
-
-## Tag histogram (`h`)
-
-`TagHistogramScreen` in `histogram.py`. Shows all tags present in the current deck with counts, sorted descending. Toggle between leaf-only and ancestor-expanded modes with `t`. Method is named `_build_content` — do **not** rename to `_render` (Textual uses that internally).
 
 ---
 
@@ -228,8 +222,8 @@ Save format:
 | `d` | On a card leaf: remove card entirely. On a group: remove group memberships + delete group (permanent groups: clear memberships only). |
 | `e` | On a card leaf: open `CardGroupEditorScreen` to toggle group memberships and adjust count |
 | `m` | On a card leaf: toggle maybeboard status (adds/removes from the Maybeboard group) |
-| `h` | Open tag histogram screen |
 | `o` | Cycle sort order within groups (Name → MV → Price → Name …) |
+| `S` | Focus deck filter input (filters tree in place; stays active until manually cleared) |
 | `ctrl+e` | Export deck (opens exporter picker) |
 | `ctrl+n` | New deck — resets to initial state (five permanent groups, no cards) |
 | `ctrl+s` | Save deck (prompts for name on first save, then saves in place) |
@@ -240,17 +234,31 @@ Save format:
 
 ---
 
+## QueryInput (`widgets.py`)
+
+`QueryInput(Input)` is a reusable input widget used everywhere a query string is entered (search screen and deck filter). It handles three concerns in one place:
+
+- **Quote auto-pairing** via `_on_key`: if `"` is typed and the cursor is already on a `"`, jump over it; otherwise insert `""` and position the cursor between them. Uses `event.prevent_default()` (not `event.stop()`) — `prevent_default()` sets `_no_default_action` which stops Textual's MRO dispatch loop, while `event.stop()` only prevents widget-tree bubbling.
+- **Debounce** via `watch_value`: starts/restarts a timer on every value change; posts `QueryInput.Debounced(input, value)` when it fires, and fires immediately on Enter. Timer delay is configurable (`delay` constructor param; search screen uses 1.0s, deck filter uses 0.4s).
+- **Validation tinting**: `watch_value` calls `validate_query` and adds/removes the `query-error` CSS class. The CSS rules for `query-error` must live in **app-level or screen-level CSS** — `DEFAULT_CSS` has lower priority than app CSS and will be silently overridden.
+
+**Textual CSS gotchas for `QueryInput`:**
+- App-level `Input { ... }` rules do **not** automatically apply to `QueryInput` — add explicit `QueryInput { ... }` rules alongside them.
+- `DEFAULT_CSS` on a widget has **lower** priority than app/screen CSS. Error-state rules (`QueryInput.query-error`) must be in `DeckbuilderApp.CSS` and `SearchScreen.CSS`, not in `DEFAULT_CSS`.
+- `on_input_changed` defined on a widget is **not** called for events the widget itself posts (Textual dispatches to parents, not the sender). Use `watch_value` instead for reactive logic that needs to fire on the widget itself.
+- `select_on_focus=False` must be set on the input to prevent `inp.focus()` from selecting all text after autocomplete.
+
+Consumers handle `on_query_input_debounced(event: QueryInput.Debounced)` to react to the settled value. The `event.input` attribute gives back the widget (useful for filtering by id when multiple inputs are present).
+
+---
+
 ## Otag autocomplete (`search.py`)
 
 When the user types `otag:` in the search input, a suggestion dropdown appears below showing matching tag names. Selecting a tag completes the token in-place.
 
 ### Implementation
 
-- **`_SmartInput(Input)`** subclass handles `"` auto-pairing. When `"` is typed:
-  - If the character at the cursor is already `"`, jump the cursor over it.
-  - Otherwise insert `""` and place the cursor between them.
-  - Uses `event.prevent_default()` (not `event.stop()`) to break Textual's MRO dispatch loop so `Input._on_key` doesn't also run and double-insert the character. `event.stop()` only prevents widget-tree bubbling; `prevent_default()` sets `_no_default_action` which is checked at the top of each MRO iteration.
-  - `select_on_focus=False` must be set on the input to prevent `inp.focus()` from selecting all text after autocomplete.
+- The search input is a `QueryInput` (see above). `select_on_focus=False` must be set to prevent `inp.focus()` from selecting all text after autocomplete.
 
 - **`_otag_context(value, pos) -> tuple[int, int, str] | None`** — scans left from cursor to find the current token, checks for `otag:` prefix (with optional leading `-`), handles both quoted (`otag:"card draw`) and unquoted (`otag:ramp`) forms. Returns `(token_start, token_end, partial)` or `None` if not in an otag token or the token is already complete (closing `"` present).
 
@@ -274,6 +282,18 @@ When the user types `otag:` in the search input, a suggestion dropdown appears b
 `SearchScreen` is typed `Screen[str]` and dismisses with the current query string. `DeckbuilderApp` stores this in `_last_search_query` and passes it back as `initial_query` the next time the group search screen is opened, so the query is remembered for the session. Commander and partner searches always open with an empty query.
 
 `_sync_detail_to_cursor()` is called via `call_after_refresh` at the end of every `_rebuild_tree()`. This ensures the `CardDetail` panel always reflects the actual cursor position after a rebuild — Textual's `NodeHighlighted` event does not re-fire when the cursor index is unchanged but a different card is now at that position (e.g. after a card moves to another group).
+
+`on_input_changed` handles autocomplete suggestions (immediate, every keystroke). `on_query_input_debounced` handles the actual search (debounced via `QueryInput`).
+
+---
+
+## Deck filter (main window)
+
+`S` focuses a `QueryInput` (`#deck-search`) above the tree. While active it filters the tree to only show matching cards — including commander/partner. Empty groups are hidden when a filter is active. The filter stays in place until manually cleared; pressing `tab` returns focus to the tree without clearing it.
+
+`DeckbuilderApp._deck_filter: str` stores the current filter value. `_rebuild_tree()` calls `self._db.query(parse_query(self._deck_filter))` to get matching oracle_ids, then filters all entries (including commander/partner) against that set. `on_query_input_debounced` updates `_deck_filter` and rebuilds.
+
+Invalid filter syntax turns the input red (`query-error` class) — same behaviour as the search screen. The filter uses the full search syntax (mv, otag, eur, etc.).
 
 ---
 

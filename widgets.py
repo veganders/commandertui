@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import NamedTuple, Optional
+from typing import Callable, NamedTuple, Optional
 
 from rich.text import Text
+from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
@@ -15,7 +16,7 @@ from textual.screen import ModalScreen
 from textual.widget import Widget
 from textual.widgets import Input, Label, ListItem, ListView, Select, Static
 
-from db import Card, CardDB
+from db import Card, CardDB, parse_query, validate_query
 from exporter import DeckExporter
 from models import Deck, Group
 from settings import Settings
@@ -44,6 +45,175 @@ def fmt_price(price: Optional[float], currency: str) -> str:
         return "N/A"
     sym = CURRENCY_SYMBOLS.get(currency, "")
     return f"{sym}{price:.2f}"
+
+
+# ── QueryInput ────────────────────────────────────────────────────────────────
+
+class QueryInput(Input):
+    """Input with quote auto-pairing, query validation tinting, and debounce.
+
+    Posts QueryInput.Debounced after the delay (and immediately on Enter).
+    Parents handle on_query_input_debounced to react to the settled value.
+    """
+
+    DEFAULT_CSS = ""
+
+    class Debounced(Message):
+        def __init__(self, input: "QueryInput", value: str, from_submit: bool = False) -> None:
+            super().__init__()
+            self.input = input
+            self.value = value
+            self.from_submit = from_submit
+
+        @property
+        def control(self) -> "QueryInput":
+            return self.input
+
+    def __init__(self, *args, delay: float = 0.5, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._delay = delay
+        self._timer = None
+
+    async def _on_key(self, event: events.Key) -> None:
+        if event.character != '"':
+            await super()._on_key(event)
+            return
+        self._restart_blink()
+        pos = self.cursor_position
+        val = self.value
+        if pos < len(val) and val[pos] == '"':
+            self.cursor_position = pos + 1
+        else:
+            self.insert_text_at_cursor('""')
+            self.cursor_position = pos + 1
+        event.prevent_default()
+        event.stop()
+
+    def watch_value(self, value: str) -> None:
+        if validate_query(parse_query(value)):
+            self.remove_class("query-error")
+        else:
+            self.add_class("query-error")
+        if self._timer is not None:
+            self._timer.stop()
+        self._timer = self.set_timer(self._delay, lambda: self.post_message(self.Debounced(self, value, from_submit=False)))
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if self._timer is not None:
+            self._timer.stop()
+            self._timer = None
+        self.post_message(self.Debounced(self, self.value, from_submit=True))
+
+
+# ── Otag autocomplete helpers ─────────────────────────────────────────────────
+
+def _otag_context(value: str, pos: int) -> tuple[int, int, str] | None:
+    """If cursor is inside an otag: token, return (token_start, token_end, partial)."""
+    before = value[:pos]
+    in_quote = False
+    token_start = 0
+    for i, ch in enumerate(before):
+        if ch == '"':
+            in_quote = not in_quote
+        elif ch == ' ' and not in_quote:
+            token_start = i + 1
+    token = before[token_start:]
+    stripped = token.lstrip('-')
+    if not stripped.lower().startswith('otag:'):
+        return None
+    after_colon = stripped[5:]
+    if after_colon.startswith('"'):
+        inner = after_colon[1:]
+        if '"' in inner:
+            return None  # closing quote present — token is complete
+        partial = inner
+    else:
+        partial = after_colon
+    return token_start, pos, partial
+
+
+class OtagSuggestions:
+    """Manages an otag autocomplete dropdown for a QueryInput + ListView pair."""
+
+    def __init__(self, owner, input_id: str, listview_id: str, tags: list[str]) -> None:
+        self._owner = owner
+        self._input_id = input_id
+        self._listview_id = listview_id
+        self.tags = tags
+        self._matches: list[str] = []
+        self._token_start: int = 0
+        self._token_end: int = 0
+
+    def _inp(self) -> "QueryInput":
+        return self._owner.query_one(self._input_id, QueryInput)
+
+    def _sugg(self) -> ListView:
+        return self._owner.query_one(self._listview_id, ListView)
+
+    @property
+    def visible(self) -> bool:
+        return self._sugg().display
+
+    def current_tag(self) -> str | None:
+        sugg = self._sugg()
+        idx = sugg.index if sugg.index is not None else 0
+        if 0 <= idx < len(self._matches):
+            return self._matches[idx]
+        return None
+
+    def update(self, value: str, pos: int) -> None:
+        sugg = self._sugg()
+        ctx = _otag_context(value, pos)
+        if ctx is None:
+            if sugg.display:
+                sugg.display = False
+            return
+        token_start, token_end, partial = ctx
+        matches = [t for t in self.tags if partial.lower() in t][:12]
+        if not matches:
+            if sugg.display:
+                sugg.display = False
+            return
+        self._token_start = token_start
+        self._token_end = token_end
+        self._matches = matches
+        sugg.clear()
+        for tag in matches:
+            sugg.append(ListItem(Label(tag)))
+        sugg.styles.margin = (0, 0, 0, min(token_start + 2, 24))
+        sugg.display = True
+        sugg.index = 0
+
+    def apply(self, tag: str, callback: Optional[Callable[[str], None]] = None) -> None:
+        inp = self._inp()
+        sugg = self._sugg()
+        val = inp.value
+        pos = inp.cursor_position
+        ctx = _otag_context(val, pos)
+        if ctx:
+            token_start, token_end, _ = ctx
+        else:
+            token_start, token_end = self._token_start, self._token_end
+        replace_end = token_end
+        if token_end < len(val) and val[token_end] == '"':
+            replace_end = token_end + 1
+        neg = val[token_start:token_start + 1] == '-'
+        pfx = '-otag:' if neg else 'otag:'
+        replacement = f'{pfx}"{tag}"' if ' ' in tag else f'{pfx}{tag}'
+        inp.replace(replacement, token_start, replace_end)
+        sugg.display = False
+        inp.focus()
+        if callback:
+            callback(inp.value)
+
+    def navigate(self, direction: int) -> None:
+        sugg = self._sugg()
+        if self._matches:
+            current = sugg.index if sugg.index is not None else (-1 if direction > 0 else 0)
+            sugg.index = (current + direction) % len(self._matches)
+
+    def hide(self) -> None:
+        self._sugg().display = False
 
 
 # ── GroupNameModal ─────────────────────────────────────────────────────────────
