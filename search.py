@@ -12,7 +12,7 @@ from textual.screen import Screen
 from textual.widgets import Input, Label, ListItem, ListView
 
 from rich.text import Text
-from db import And, Atom, Card, CardDB, Not, parse_query
+from db import And, Atom, Card, CardDB, Not, parse_query, validate_query
 from models import MAYBEBOARD, CardEntry, CardRole, Deck, Group
 from partner import partner_mode, partner_filter
 from settings import Settings
@@ -65,6 +65,8 @@ class SearchScreen(Screen[str]):
         align: left middle;
     }
     #srch-input { width: 1fr; }
+    #srch-input.query-error { background: $error 25%; }
+    #srch-input.query-error:focus { background: $error 35%; }
     #srch-suggest {
         display: none;
         height: auto;
@@ -328,6 +330,11 @@ class SearchScreen(Screen[str]):
 
     def _run_search(self, query: str) -> None:
         node = parse_query(query)
+        inp = self.query_one("#srch-input", _SmartInput)
+        if validate_query(node):
+            inp.remove_class("query-error")
+        else:
+            inp.add_class("query-error")
         implied = self._implied_node()
         if implied is not None:
             node = And([implied] + (node.children if isinstance(node, And) else [node]))

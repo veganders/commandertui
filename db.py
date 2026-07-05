@@ -384,14 +384,14 @@ def _eval_atom(atom: Atom, card: Card, tags: list[str]) -> bool:
             try:
                 return _CMP_OPS.get(op, float.__eq__)(card.cmc, float(num))
             except ValueError:
-                return True
+                return False
         case 'power' | 'toughness':
             m = _VALUE_CMP_RE.match(value)
             op, num = (m.group(1), m.group(2)) if m else ('=', value)
             try:
                 threshold = float(num)
             except ValueError:
-                return True
+                return False
             stat = card.power if key == 'power' else card.toughness
             if stat is None:
                 return False
@@ -406,7 +406,7 @@ def _eval_atom(atom: Atom, card: Card, tags: list[str]) -> bool:
             try:
                 threshold = float(num)
             except ValueError:
-                return True
+                return False
             fn = _CMP_OPS.get(op, float.__eq__)
             prices = [p.prices[key] for p in card.printings if key in p.prices]
             return bool(prices) and fn(min(prices), threshold)
@@ -423,6 +423,28 @@ def _eval_node(node: QueryNode, card: Card, tags: list[str]) -> bool:
         return any(_eval_node(c, card, tags) for c in node.children)
     if isinstance(node, Not):
         return not _eval_node(node.child, card, tags)
+
+
+def _validate_atom(atom: Atom) -> bool:
+    if atom.key in ('mv', 'power', 'toughness', 'eur', 'usd', 'tix'):
+        m = _VALUE_CMP_RE.match(atom.value)
+        _, num = (m.group(1), m.group(2)) if m else ('=', atom.value)
+        try:
+            float(num)
+        except ValueError:
+            return False
+    return True
+
+
+def validate_query(node: QueryNode) -> bool:
+    """Returns False if any numeric filter atom has an unparseable value."""
+    if isinstance(node, Atom):
+        return _validate_atom(node)
+    if isinstance(node, (And, Or)):
+        return all(validate_query(c) for c in node.children)
+    if isinstance(node, Not):
+        return validate_query(node.child)
+    return True
 
 
 def load_db() -> CardDB:
