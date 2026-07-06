@@ -239,7 +239,7 @@ Save format:
 `QueryInput(Input)` is a reusable input widget used everywhere a query string is entered (search screen and deck filter). It handles three concerns in one place:
 
 - **Quote auto-pairing** via `_on_key`: if `"` is typed and the cursor is already on a `"`, jump over it; otherwise insert `""` and position the cursor between them. Uses `event.prevent_default()` (not `event.stop()`) — `prevent_default()` sets `_no_default_action` which stops Textual's MRO dispatch loop, while `event.stop()` only prevents widget-tree bubbling.
-- **Debounce** via `watch_value`: starts/restarts a timer on every value change; posts `QueryInput.Debounced(input, value)` when it fires, and fires immediately on Enter. Timer delay is configurable (`delay` constructor param; search screen uses 1.0s, deck filter uses 0.4s).
+- **Debounce** via `watch_value`: starts/restarts a timer on every value change; posts `QueryInput.Debounced(input, value, from_submit)` when it fires, and fires immediately on Enter. `from_submit` is `False` for timer-fired events and `True` for Enter. Timer delay is configurable (`delay` constructor param; search screen uses 1.0s, deck filter uses 0.4s).
 - **Validation tinting**: `watch_value` calls `validate_query` and adds/removes the `query-error` CSS class. The CSS rules for `query-error` must live in **app-level or screen-level CSS** — `DEFAULT_CSS` has lower priority than app CSS and will be silently overridden.
 
 **Textual CSS gotchas for `QueryInput`:**
@@ -248,27 +248,34 @@ Save format:
 - `on_input_changed` defined on a widget is **not** called for events the widget itself posts (Textual dispatches to parents, not the sender). Use `watch_value` instead for reactive logic that needs to fire on the widget itself.
 - `select_on_focus=False` must be set on the input to prevent `inp.focus()` from selecting all text after autocomplete.
 
-Consumers handle `on_query_input_debounced(event: QueryInput.Debounced)` to react to the settled value. The `event.input` attribute gives back the widget (useful for filtering by id when multiple inputs are present).
+Consumers handle `on_query_input_debounced(event: QueryInput.Debounced)` to react to the settled value. `event.input` gives back the widget (useful for filtering by id); `event.from_submit` distinguishes Enter-triggered fires from timer-triggered ones (used by `SearchScreen` to decide whether to close the suggestion dropdown).
 
 ---
 
-## Otag autocomplete (`search.py`)
+## Filter token autocomplete (`widgets.py`, `search.py`)
 
-When the user types `otag:` in the search input, a suggestion dropdown appears below showing matching tag names. Selecting a tag completes the token in-place.
+When the user types a supported filter prefix (`otag:`, `t:`, `kw:`) in the search input or deck filter, a suggestion dropdown appears below showing matching values. Selecting a value completes the token in-place.
 
 ### Implementation
 
 - The search input is a `QueryInput` (see above). `select_on_focus=False` must be set to prevent `inp.focus()` from selecting all text after autocomplete.
 
-- **`_otag_context(value, pos) -> tuple[int, int, str] | None`** — scans left from cursor to find the current token, checks for `otag:` prefix (with optional leading `-`), handles both quoted (`otag:"card draw`) and unquoted (`otag:ramp`) forms. Returns `(token_start, token_end, partial)` or `None` if not in an otag token or the token is already complete (closing `"` present).
+- **`_filter_token_context(value, pos, prefixes) -> tuple[int, int, str, str] | None`** — scans left from cursor to find the current token, checks for any of the given prefixes (with optional leading `-`), handles quoted and unquoted forms. Returns `(token_start, token_end, partial, matched_prefix)` or `None` if not in a matching token or the token is already complete (closing `"` present).
 
-- **`_update_suggestions(value, pos)`** — called from `on_input_changed`. Filters `_all_tags` by the partial string, populates the `#srch-suggest` ListView, sets `margin-left` to align the dropdown with the token position, and sets `sugg.index = 0` so the first item is pre-highlighted. Hides when no matches or not in otag context.
+- **`FilterSuggestions`** — manages a dropdown for a `QueryInput` + `ListView` pair. Takes `candidates: dict[str, list[str]]` mapping each prefix to its completion list. `update(value, pos)` detects the active prefix and filters candidates; `apply(value, callback)` replaces the token and optionally calls back with the new query; `navigate(direction)` handles Tab/Shift+Tab cycling; `current_value()` returns the highlighted entry. Used by both `SearchScreen` (`#srch-suggest`) and `DeckbuilderApp` (`#deck-suggest`).
 
-- **`_apply_suggestion(tag)`** — replaces the typed partial with the completed tag. `inp.replace(text, start, end)` uses **exclusive** `end` (Python slice semantics: `value[end:]` is the preserved tail). So `replace_end = token_end` (no closing quote) or `replace_end = token_end + 1` (consume auto-paired closing `"`).
+- **`build_filter_candidates(db) -> dict[str, list[str]]`** — builds all three candidate lists in one pass. **Call once per session** (in `DeckbuilderApp.on_mount`); store the result in `self._filter_candidates` and pass it to every `SearchScreen` via the `filter_candidates=` constructor argument. `SearchScreen.on_mount` no longer recomputes it. Candidate sources:
+  - `otag:` → all ancestor-expanded tag labels from `db.tags`
+  - `t:` → `extract_type_words()` applied to every card's type line
+  - `kw:` → all unique keyword strings from `card.keywords`
 
-- Tags with spaces are wrapped in quotes: `otag:"card draw"`. Tags without spaces are unquoted: `otag:ramp`.
+- **`extract_type_words(type_line) -> set[str]`** — splits a type line into individual completion tokens. Replaces `—` with a space, strips `//` (split-card separator), and preserves entries in `_MULTIWORD_TYPES` as single tokens before splitting the remainder. Add new multi-word types to `_MULTIWORD_TYPES` in `widgets.py` (currently: `["Time Lord"]`).
 
-- `#srch-suggest` ListView is positioned below the search bar (not inline). Navigation while suggestions are visible (focus stays in input throughout):
+- Values with spaces are wrapped in quotes on completion: `otag:"card draw"`, `kw:"Partner with"`. Values without spaces are unquoted.
+
+- `SearchScreen.on_query_input_debounced` uses `event.from_submit` to decide whether to close the dropdown: timer-fired debounce (`from_submit=False`) leaves it open; Enter (`from_submit=True`) closes it.
+
+- Dropdown (`#srch-suggest` / `#deck-suggest`) is positioned below the input. Navigation while suggestions are visible (focus stays in the input):
   - `enter` — apply the currently highlighted suggestion
   - `tab` — cycle highlight forward (wraps around)
   - `shift+tab` — cycle highlight backward (wraps around)

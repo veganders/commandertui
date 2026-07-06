@@ -19,7 +19,7 @@ from partner import partner_mode, partner_filter
 from search import MODE_COMMANDER, MODE_GROUP, MODE_PARTNER, SearchScreen
 from settings import Settings
 from sorting import CardSorter, MVSorter, NameSorter, PriceSorter
-from widgets import CardDetail, CardGroupEditorScreen, DeckNameModal, ExportModal, GroupNameModal, OtagSuggestions, OpenDeckScreen, QueryInput, TopBar
+from widgets import CardDetail, CardGroupEditorScreen, DeckNameModal, ExportModal, FilterSuggestions, GroupNameModal, OpenDeckScreen, QueryInput, TopBar, build_filter_candidates
 
 _EXPORTERS = [ArchidektExporter(), ClipboardExporter()]
 
@@ -111,7 +111,8 @@ class DeckbuilderApp(App):
         self._sort_idx: int = 0
         self._last_search_query: str = ""
         self._deck_filter: str = ""
-        self._deck_suggestions: Optional[OtagSuggestions] = None
+        self._deck_suggestions: Optional[FilterSuggestions] = None
+        self._filter_candidates: dict = {}
 
     def _sorters(self) -> list[CardSorter]:
         return [NameSorter(), MVSorter(), PriceSorter(self._settings.currency)]
@@ -133,8 +134,8 @@ class DeckbuilderApp(App):
     def on_mount(self) -> None:
         self._rebuild_tree()
         self.query_one("#groups", Tree).focus()
-        tags = sorted({t for tag_list in self._db.tags.values() for t in tag_list})
-        self._deck_suggestions = OtagSuggestions(self, "#deck-search", "#deck-suggest", tags)
+        self._filter_candidates = build_filter_candidates(self._db)
+        self._deck_suggestions = FilterSuggestions(self, "#deck-search", "#deck-suggest", self._filter_candidates)
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id != "deck-search" or self._deck_suggestions is None:
@@ -148,7 +149,7 @@ class DeckbuilderApp(App):
         if self.focused is not inp:
             return
         if event.key == "enter":
-            tag = self._deck_suggestions.current_tag()
+            tag = self._deck_suggestions.current_value()
             if tag:
                 self._deck_suggestions.apply(tag)
             event.stop()
@@ -165,7 +166,7 @@ class DeckbuilderApp(App):
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         if event.list_view.id != "deck-suggest" or self._deck_suggestions is None:
             return
-        tag = self._deck_suggestions.current_tag()
+        tag = self._deck_suggestions.current_value()
         if tag:
             self._deck_suggestions.apply(tag)
         event.stop()
@@ -294,6 +295,7 @@ class DeckbuilderApp(App):
                 self._db, self._deck, self._settings, mode,
                 group=group, post_filter=post_filter, title=title,
                 initial_query=self._last_search_query if mode == MODE_GROUP else "",
+                filter_candidates=self._filter_candidates,
             ),
             callback=on_done,
         )

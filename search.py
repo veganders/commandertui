@@ -15,7 +15,7 @@ from db import And, Atom, Card, CardDB, Not, parse_query, validate_query
 from models import MAYBEBOARD, CardEntry, CardRole, Deck, Group
 from partner import partner_mode, partner_filter
 from settings import Settings
-from widgets import CardDetail, OtagSuggestions, QueryInput
+from widgets import CardDetail, FilterSuggestions, QueryInput
 
 MODE_COMMANDER = "commander"
 MODE_PARTNER = "partner"
@@ -68,6 +68,7 @@ class SearchScreen(Screen[str]):
         post_filter: Optional[Callable[[Card], bool]] = None,
         title: Optional[str] = None,
         initial_query: str = "",
+        filter_candidates: Optional[dict] = None,
     ) -> None:
         super().__init__()
         self._db = db
@@ -80,7 +81,7 @@ class SearchScreen(Screen[str]):
         self._initial_query = initial_query
         self._results: list[Card] = []
         self._current_card: Optional[Card] = None
-        self._suggestions = OtagSuggestions(self, "#srch-input", "#srch-suggest", [])
+        self._suggestions = FilterSuggestions(self, "#srch-input", "#srch-suggest", filter_candidates or {})
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="srch-bar"):
@@ -102,7 +103,6 @@ class SearchScreen(Screen[str]):
         return base + "  —  t:type  o:oracle  kw:partner  id:wubrg  c:rg  otag:ramp  mv>=3  eur<=1  -t:land"
 
     def on_mount(self) -> None:
-        self._suggestions.tags = sorted({t for tags in self._db.tags.values() for t in tags})
         inp = self.query_one("#srch-input", QueryInput)
         if self._initial_query:
             inp.value = self._initial_query
@@ -132,7 +132,7 @@ class SearchScreen(Screen[str]):
 
         if self._suggestions.visible and self.focused is inp:
             if event.key == "enter":
-                tag = self._suggestions.current_tag()
+                tag = self._suggestions.current_value()
                 if tag:
                     self._suggestions.apply(tag, self._run_search)
                 event.stop()
@@ -170,7 +170,7 @@ class SearchScreen(Screen[str]):
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         if event.list_view.id != "srch-suggest":
             return
-        tag = self._suggestions.current_tag()
+        tag = self._suggestions.current_value()
         if tag:
             self._suggestions.apply(tag, self._run_search)
         event.stop()

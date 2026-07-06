@@ -105,10 +105,49 @@ class QueryInput(Input):
         self.post_message(self.Debounced(self, self.value, from_submit=True))
 
 
-# ── Otag autocomplete helpers ─────────────────────────────────────────────────
+# ── Filter token autocomplete helpers ─────────────────────────────────────────
 
-def _otag_context(value: str, pos: int) -> tuple[int, int, str] | None:
-    """If cursor is inside an otag: token, return (token_start, token_end, partial)."""
+# Two-word creature/card types that must not be split. Extend this list when
+# a new multi-word type is introduced.
+_MULTIWORD_TYPES: list[str] = ["Time Lord"]
+
+
+def build_filter_candidates(db: "CardDB") -> "dict[str, list[str]]":
+    """Build the autocomplete candidate lists for all supported filter prefixes.
+
+    Expensive (scans all cards), so call once per session and reuse the result.
+    """
+    return {
+        "otag:": sorted({t for tags in db.tags.values() for t in tags}),
+        "t:": sorted({w for c in db.cards.values() for w in extract_type_words(c.type_line)}),
+        "kw:": sorted({kw for c in db.cards.values() for kw in c.keywords}),
+    }
+
+
+def extract_type_words(type_line: str) -> set[str]:
+    """Return all individual and multi-word type tokens from a type line.
+
+    Handles split-card separators (//) and preserves entries in _MULTIWORD_TYPES.
+    """
+    line = type_line.replace("—", " ")
+    words: set[str] = set()
+    for mwt in _MULTIWORD_TYPES:
+        if mwt in line:
+            words.add(mwt)
+            line = line.replace(mwt, " ")
+    words.update(w for w in line.split() if w != "//")
+    return words
+
+
+def _filter_token_context(
+    value: str, pos: int, prefixes: frozenset[str]
+) -> tuple[int, int, str, str] | None:
+    """If cursor is inside a filter token matching one of `prefixes`, return
+    (token_start, token_end, partial, matched_prefix), else None.
+
+    Handles quoted (prefix:"multi word) and unquoted (prefix:word) forms.
+    Returns None if the token already has a closing quote (complete).
+    """
     before = value[:pos]
     in_quote = False
     token_start = 0
@@ -119,30 +158,43 @@ def _otag_context(value: str, pos: int) -> tuple[int, int, str] | None:
             token_start = i + 1
     token = before[token_start:]
     stripped = token.lstrip('-')
-    if not stripped.lower().startswith('otag:'):
-        return None
-    after_colon = stripped[5:]
-    if after_colon.startswith('"'):
-        inner = after_colon[1:]
-        if '"' in inner:
-            return None  # closing quote present — token is complete
-        partial = inner
-    else:
-        partial = after_colon
-    return token_start, pos, partial
+    stripped_lower = stripped.lower()
+    for prefix in prefixes:
+        if stripped_lower.startswith(prefix):
+            after_prefix = stripped[len(prefix):]
+            if after_prefix.startswith('"'):
+                inner = after_prefix[1:]
+                if '"' in inner:
+                    return None  # closing quote present — token is complete
+                partial = inner
+            else:
+                partial = after_prefix
+            return token_start, pos, partial, prefix
+    return None
 
 
-class OtagSuggestions:
-    """Manages an otag autocomplete dropdown for a QueryInput + ListView pair."""
+class FilterSuggestions:
+    """Manages a filter-token autocomplete dropdown for a QueryInput + ListView pair.
 
-    def __init__(self, owner, input_id: str, listview_id: str, tags: list[str]) -> None:
+    `candidates` maps each supported prefix (e.g. ``"otag:"``, ``"t:"``, ``"kw:"``)
+    to the sorted list of completion values for that prefix.
+    """
+
+    def __init__(
+        self,
+        owner,
+        input_id: str,
+        listview_id: str,
+        candidates: dict[str, list[str]],
+    ) -> None:
         self._owner = owner
         self._input_id = input_id
         self._listview_id = listview_id
-        self.tags = tags
+        self.candidates = candidates
         self._matches: list[str] = []
         self._token_start: int = 0
         self._token_end: int = 0
+        self._current_prefix: str = ""
 
     def _inp(self) -> "QueryInput":
         return self._owner.query_one(self._input_id, QueryInput)
@@ -154,7 +206,7 @@ class OtagSuggestions:
     def visible(self) -> bool:
         return self._sugg().display
 
-    def current_tag(self) -> str | None:
+    def current_value(self) -> str | None:
         sugg = self._sugg()
         idx = sugg.index if sugg.index is not None else 0
         if 0 <= idx < len(self._matches):
@@ -163,43 +215,44 @@ class OtagSuggestions:
 
     def update(self, value: str, pos: int) -> None:
         sugg = self._sugg()
-        ctx = _otag_context(value, pos)
+        ctx = _filter_token_context(value, pos, frozenset(self.candidates))
         if ctx is None:
             if sugg.display:
                 sugg.display = False
             return
-        token_start, token_end, partial = ctx
-        matches = [t for t in self.tags if partial.lower() in t][:12]
+        token_start, token_end, partial, prefix = ctx
+        matches = [v for v in self.candidates[prefix] if partial.lower() in v.lower()][:12]
         if not matches:
             if sugg.display:
                 sugg.display = False
             return
         self._token_start = token_start
         self._token_end = token_end
+        self._current_prefix = prefix
         self._matches = matches
         sugg.clear()
-        for tag in matches:
-            sugg.append(ListItem(Label(tag)))
+        for val in matches:
+            sugg.append(ListItem(Label(val)))
         sugg.styles.margin = (0, 0, 0, min(token_start + 2, 24))
         sugg.display = True
         sugg.index = 0
 
-    def apply(self, tag: str, callback: Optional[Callable[[str], None]] = None) -> None:
+    def apply(self, value: str, callback: Optional[Callable[[str], None]] = None) -> None:
         inp = self._inp()
         sugg = self._sugg()
         val = inp.value
         pos = inp.cursor_position
-        ctx = _otag_context(val, pos)
+        ctx = _filter_token_context(val, pos, frozenset(self.candidates))
         if ctx:
-            token_start, token_end, _ = ctx
+            token_start, token_end, _, prefix = ctx
         else:
-            token_start, token_end = self._token_start, self._token_end
+            token_start, token_end, prefix = self._token_start, self._token_end, self._current_prefix
         replace_end = token_end
         if token_end < len(val) and val[token_end] == '"':
             replace_end = token_end + 1
         neg = val[token_start:token_start + 1] == '-'
-        pfx = '-otag:' if neg else 'otag:'
-        replacement = f'{pfx}"{tag}"' if ' ' in tag else f'{pfx}{tag}'
+        pfx = f'-{prefix}' if neg else prefix
+        replacement = f'{pfx}"{value}"' if ' ' in value else f'{pfx}{value}'
         inp.replace(replacement, token_start, replace_end)
         sugg.display = False
         inp.focus()
@@ -214,6 +267,7 @@ class OtagSuggestions:
 
     def hide(self) -> None:
         self._sugg().display = False
+
 
 
 # ── GroupNameModal ─────────────────────────────────────────────────────────────
