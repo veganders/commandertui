@@ -365,7 +365,7 @@ def _eval_atom(atom: Atom, card: Card, tags: list[str]) -> bool:
         case 'o' | 'oracle':
             return value.lower() in card.oracle_text.lower()
         case 't' | 'type':
-            return value.lower() in card.type_line.lower()
+            return bool(re.search(r'\b' + re.escape(value.lower()) + r'\b', card.type_line.lower()))
         case 'id':
             color_set = {ch.upper() for ch in value if ch.isalpha()}
             return set(card.color_identity) <= color_set

@@ -139,10 +139,12 @@ class SearchScreen(Screen[str]):
                 return
             if event.key == "tab":
                 self._suggestions.navigate(+1)
+                event.prevent_default()
                 event.stop()
                 return
             if event.key == "shift+tab":
                 self._suggestions.navigate(-1)
+                event.prevent_default()
                 event.stop()
                 return
             if event.key == "escape":

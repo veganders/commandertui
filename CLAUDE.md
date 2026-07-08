@@ -137,7 +137,7 @@ The expansion is done once at load time via a memoised recursive `_all_labels(ta
 | Filter | Meaning |
 |---|---|
 | bare word | name substring |
-| `t:type` | type line substring |
+| `t:type` | type line word-boundary match (`t:rat` matches Rat but not Pirate) |
 | `o:"text"` | oracle text substring (quotes allow spaces) |
 | `id:wubrg` | color identity is a **subset** of the given colors |
 | `c:rg` | card colors include **at least** red and green |
@@ -262,7 +262,7 @@ When the user types a supported filter prefix (`otag:`, `t:`, `kw:`) in the sear
 
 - **`_filter_token_context(value, pos, prefixes) -> tuple[int, int, str, str] | None`** — scans left from cursor to find the current token, checks for any of the given prefixes (with optional leading `-`), handles quoted and unquoted forms. Returns `(token_start, token_end, partial, matched_prefix)` or `None` if not in a matching token or the token is already complete (closing `"` present).
 
-- **`FilterSuggestions`** — manages a dropdown for a `QueryInput` + `ListView` pair. Takes `candidates: dict[str, list[str]]` mapping each prefix to its completion list. `update(value, pos)` detects the active prefix and filters candidates; `apply(value, callback)` replaces the token and optionally calls back with the new query; `navigate(direction)` handles Tab/Shift+Tab cycling; `current_value()` returns the highlighted entry. Used by both `SearchScreen` (`#srch-suggest`) and `DeckbuilderApp` (`#deck-suggest`).
+- **`FilterSuggestions`** — manages a dropdown for a `QueryInput` + `ListView` pair. Takes `candidates: dict[str, list[str]]` mapping each prefix to its completion list. `update(value, pos)` detects the active prefix and filters candidates; `apply(value, callback)` replaces the token, appends a trailing space if the character after the replaced range isn't already one (prevents the dropdown from immediately reopening), and optionally calls back with the new query; `navigate(direction)` handles Tab/Shift+Tab cycling; `current_value()` returns the highlighted entry. Used by both `SearchScreen` (`#srch-suggest`) and `DeckbuilderApp` (`#deck-suggest`).
 
 - **`build_filter_candidates(db) -> dict[str, list[str]]`** — builds all three candidate lists in one pass. **Call once per session** (in `DeckbuilderApp.on_mount`); store the result in `self._filter_candidates` and pass it to every `SearchScreen` via the `filter_candidates=` constructor argument. `SearchScreen.on_mount` no longer recomputes it. Candidate sources:
   - `otag:` → all ancestor-expanded tag labels from `db.tags`
@@ -280,7 +280,7 @@ When the user types a supported filter prefix (`otag:`, `t:`, `kw:`) in the sear
   - `tab` — cycle highlight forward (wraps around)
   - `shift+tab` — cycle highlight backward (wraps around)
   - `escape` — close the dropdown
-  Both `tab` and `shift+tab` use `event.stop()` to suppress Textual's default focus-cycling behaviour.
+  Both `tab` and `shift+tab` call both `event.prevent_default()` and `event.stop()`. `event.stop()` alone is sufficient in `SearchScreen` (screen-level handler stops the event before it reaches the App, so the App's `focus_next` binding never fires), but in `DeckbuilderApp` the handler is already at the App level — `event.prevent_default()` is required there to cancel the built-in Tab focus-cycling action.
 
 ---
 

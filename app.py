@@ -125,7 +125,7 @@ class DeckbuilderApp(App):
         yield TopBar(self._deck, self._settings)
         with Horizontal(id="bottom"):
             with Vertical(id="groups-panel"):
-                yield QueryInput(placeholder="Filter deck…", id="deck-search", delay=0.4)
+                yield QueryInput(placeholder="Filter deck…", id="deck-search", delay=0.4, select_on_focus=False)
                 yield ListView(id="deck-suggest")
                 yield Tree("Groups", id="groups")
             yield CardDetail()
@@ -155,9 +155,11 @@ class DeckbuilderApp(App):
             event.stop()
         elif event.key == "tab":
             self._deck_suggestions.navigate(+1)
+            event.prevent_default()
             event.stop()
         elif event.key == "shift+tab":
             self._deck_suggestions.navigate(-1)
+            event.prevent_default()
             event.stop()
         elif event.key == "escape":
             self._deck_suggestions.hide()

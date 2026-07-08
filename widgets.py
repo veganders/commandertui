@@ -253,6 +253,8 @@ class FilterSuggestions:
         neg = val[token_start:token_start + 1] == '-'
         pfx = f'-{prefix}' if neg else prefix
         replacement = f'{pfx}"{value}"' if ' ' in value else f'{pfx}{value}'
+        if replace_end >= len(val) or val[replace_end] != ' ':
+            replacement += ' '
         inp.replace(replacement, token_start, replace_end)
         sugg.display = False
         inp.focus()
