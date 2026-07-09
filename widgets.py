@@ -322,6 +322,58 @@ class FilterSuggestions:
 
 
 
+# ── ColorChoiceModal ──────────────────────────────────────────────────────────
+
+_COLOR_CHOICES = [("W", "White"), ("U", "Blue"), ("B", "Black"), ("R", "Red"), ("G", "Green")]
+
+
+class ColorChoiceModal(ModalScreen[Optional[str]]):
+    """Shown when a commander/partner requires a color choice before the game begins."""
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    CSS = """
+    ColorChoiceModal {
+        align: center middle;
+        background: $background 60%;
+    }
+    #cc-box {
+        width: auto;
+        max-width: 80%;
+        height: auto;
+        background: $surface;
+        border: solid $primary;
+        padding: 1 2;
+    }
+    #cc-title { margin-bottom: 1; }
+    #cc-list { height: auto; max-height: 8; border: none; }
+    """
+
+    def __init__(self, card_name: str) -> None:
+        super().__init__()
+        self._card_name = card_name
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="cc-box"):
+            yield Label(f"Choose a color for {self._card_name}:", id="cc-title")
+            yield ListView(id="cc-list")
+
+    def on_mount(self) -> None:
+        lv = self.query_one("#cc-list", ListView)
+        for letter, name in _COLOR_CHOICES:
+            lv.append(ListItem(Label(f"{letter}  {name}")))
+        lv.focus()
+        lv.index = 0
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        idx = event.list_view.index
+        if idx is not None and 0 <= idx < len(_COLOR_CHOICES):
+            self.dismiss(_COLOR_CHOICES[idx][0])
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 # ── GroupNameModal ─────────────────────────────────────────────────────────────
 
 class GroupNameModal(ModalScreen[Optional[str]]):

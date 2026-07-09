@@ -53,11 +53,13 @@ def save_deck(deck: Deck) -> Path:
         data["commander"] = {
             "oracle_id": deck.commander.card.oracle_id,
             "printing": _printing_dict(deck.commander),
+            "color_identity_override": deck.commander.color_identity_override,
         }
     if deck.partner:
         data["partner"] = {
             "oracle_id": deck.partner.card.oracle_id,
             "printing": _printing_dict(deck.partner),
+            "color_identity_override": deck.partner.color_identity_override,
         }
     for entry in deck.entries.values():
         data["cards"].append({
@@ -98,14 +100,16 @@ def load_deck(path: Path, db: CardDB) -> Deck:
         card = db.cards.get(cmd_data["oracle_id"])
         if card:
             printing_idx = _find_printing_idx(card, cmd_data.get("printing"))
-            deck.commander = CardEntry(card=card, role=CardRole.COMMANDER, printing_idx=printing_idx)
+            deck.commander = CardEntry(card=card, role=CardRole.COMMANDER, printing_idx=printing_idx,
+                                       color_identity_override=cmd_data.get("color_identity_override"))
 
     partner_data = data.get("partner")
     if partner_data:
         card = db.cards.get(partner_data["oracle_id"])
         if card:
             printing_idx = _find_printing_idx(card, partner_data.get("printing"))
-            deck.partner = CardEntry(card=card, role=CardRole.PARTNER, printing_idx=printing_idx)
+            deck.partner = CardEntry(card=card, role=CardRole.PARTNER, printing_idx=printing_idx,
+                                     color_identity_override=partner_data.get("color_identity_override"))
 
     for card_data in data.get("cards", []):
         card = db.cards.get(card_data["oracle_id"])

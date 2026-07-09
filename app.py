@@ -205,6 +205,8 @@ class DeckbuilderApp(App):
             cmd_node = tree.root.add(section_label, expand=True, data=None)
             for entry in cmd_entries:
                 base = entry.card.display_label(currency, entry.printing_idx)
+                if entry.color_identity_override:
+                    base = base + Text(f" [{''.join(entry.color_identity_override)}]", style="dim")
                 cmd_node.add_leaf(base, data=entry.card)
 
         for group in self._deck.groups:

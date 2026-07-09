@@ -15,7 +15,7 @@ from db import And, Atom, Card, CardDB, Not, parse_query, validate_query
 from models import MAYBEBOARD, CardEntry, CardRole, Deck, Group
 from partner import partner_mode, partner_filter
 from settings import Settings
-from widgets import CardDetail, FilterSuggestions, QueryInput
+from widgets import CardDetail, ColorChoiceModal, FilterSuggestions, QueryInput
 
 MODE_COMMANDER = "commander"
 MODE_PARTNER = "partner"
@@ -145,6 +145,18 @@ class SearchScreen(Screen[str]):
         else:
             self._deck.selected_printings[msg.oracle_id] = msg.printing_idx
 
+    _COLOR_CHOICE_TEXT = "is your commander, choose a color before the game begins"
+
+    def _maybe_prompt_color_choice(
+        self, entry: CardEntry, get_entry: Callable[[], Optional[CardEntry]]
+    ) -> None:
+        if self._COLOR_CHOICE_TEXT not in entry.card.oracle_text.lower():
+            return
+        def on_color(color: Optional[str]) -> None:
+            if color and get_entry() is entry:
+                entry.color_identity_override = [color]
+        self.app.push_screen(ColorChoiceModal(entry.card.name), callback=on_color)
+
     # ── search ─────────────────────────────────────────────────────────────────
 
     def _run_search(self, query: str) -> None:
@@ -174,9 +186,9 @@ class SearchScreen(Screen[str]):
         if self._mode == MODE_GROUP:
             ci: set[str] = set()
             if self._deck.commander:
-                ci.update(self._deck.commander.card.color_identity)
+                ci.update(self._deck.commander.color_identity)
             if self._deck.partner:
-                ci.update(self._deck.partner.card.color_identity)
+                ci.update(self._deck.partner.color_identity)
             if ci:
                 return Atom(key="id", value="".join(sorted(ci)))
         return None
@@ -286,6 +298,7 @@ class SearchScreen(Screen[str]):
                 new_cmd: CardEntry | None = None
             else:
                 new_cmd = self._deck.make_entry(card, CardRole.COMMANDER)
+                self._maybe_prompt_color_choice(new_cmd, lambda: self._deck.commander)
             self._deck.commander = new_cmd
             if self._deck.partner is not None:
                 info = partner_mode(new_cmd.card) if new_cmd else None
@@ -297,7 +310,9 @@ class SearchScreen(Screen[str]):
             if self._deck.partner and self._deck.partner.card.oracle_id == card.oracle_id:
                 self._deck.partner = None
             else:
-                self._deck.partner = self._deck.make_entry(card, CardRole.PARTNER)
+                new_partner = self._deck.make_entry(card, CardRole.PARTNER)
+                self._maybe_prompt_color_choice(new_partner, lambda: self._deck.partner)
+                self._deck.partner = new_partner
         elif self._mode == MODE_GROUP:
             if self._deck.count_of(card.oracle_id) > 0:
                 self._deck.remove_all(card.oracle_id)

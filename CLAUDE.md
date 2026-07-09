@@ -1,5 +1,11 @@
 # Commander Deckbuilder — development notes
 
+## Code style
+
+- **DRY**: if the same logic appears more than once, extract it — a helper function, a method on the relevant class, or a shared constant. Do not repeat detection strings, pop patterns, or branching logic across commander/partner paths or other symmetric cases. Ask yourself where the logic *belongs* before writing it, not after.
+
+---
+
 ## Partner / background commander logic
 
 The `p` keybinding and any "Partner" label in the top bar must only be shown and functional when the primary commander actually supports a second commander. Everything needed is in the card's `keywords` list and `oracle_text` — no external lookup required.
@@ -49,6 +55,14 @@ None                                          # no second commander allowed
 
 Use this in both the top bar rendering (show/hide the label) and the `action_search_partner` handler so the logic is not duplicated.
 
+### Color-choosing commanders
+
+Some commanders/partners require a color choice before the game begins. Detection: `"is your commander, choose a color before the game begins" in card.oracle_text.lower()`. Currently matches: Faceless One, Clara Oswald, The Prismatic Piper.
+
+When such a card is set as commander or partner, `SearchScreen._maybe_prompt_color_choice` pushes `ColorChoiceModal` (in `widgets.py`). The chosen color is stored as `CardEntry.color_identity_override: Optional[list[str]]`. `CardEntry.color_identity` (property) returns the override if set, otherwise `card.color_identity`. All code that needs the effective color identity (e.g. `_implied_node` in `search.py`) uses `entry.color_identity`, never `entry.card.color_identity` directly.
+
+The override is shown in the deck tree as `[U]` etc. after the card name, saved/loaded in the JSON as `"color_identity_override"` on the commander/partner object, and defaults to `null` (no override) when absent.
+
 ### Detection priority (in order — stop at first match)
 
 1. `"Partner with" in keywords` → `partner_with`
@@ -87,6 +101,8 @@ class CardEntry:
     groups: set[str] = field(default_factory=set)
     printing_idx: int = 0          # index into card.printings; stored here, not in a separate dict
     role: CardRole = CardRole.MAIN
+    color_identity_override: Optional[list[str]] = None  # set for color-choosing commanders
+    # property: color_identity -> override if set, else card.color_identity
     # helpers: in_group(name), join_group(name), leave_group(name), is_maybe()
     # method:  price(currency: str) -> float | None
 

@@ -25,6 +25,13 @@ class CardEntry:
     groups: set[str] = field(default_factory=set)
     printing_idx: int = 0
     role: CardRole = CardRole.MAIN
+    color_identity_override: Optional[list[str]] = None
+
+    @property
+    def color_identity(self) -> list[str]:
+        if self.color_identity_override is not None:
+            return self.color_identity_override
+        return self.card.color_identity
 
     def in_group(self, name: str) -> bool:
         return name in self.groups
