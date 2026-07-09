@@ -270,6 +270,56 @@ class FilterSuggestions:
     def hide(self) -> None:
         self._sugg().display = False
 
+    # ── convenience handlers (delegate from screen on_* methods) ──────────────
+
+    def handle_input_changed(self, event: "Input.Changed") -> bool:
+        if event.input.id != self._input_id.lstrip("#"):
+            return False
+        self.update(event.input.value, event.input.cursor_position)
+        return True
+
+    def handle_debounced(self, event: "QueryInput.Debounced", callback: "Callable[[str], None]") -> bool:
+        if event.input.id != self._input_id.lstrip("#"):
+            return False
+        if event.from_submit:
+            self.hide()
+        callback(event.value)
+        return True
+
+    def handle_key(self, event, callback: "Callable[[str], None]") -> bool:
+        if not self.visible or self._owner.focused is not self._inp():
+            return False
+        if event.key == "enter":
+            tag = self.current_value()
+            if tag:
+                self.apply(tag, callback)
+            event.stop()
+            return True
+        if event.key == "tab":
+            self.navigate(+1)
+            event.prevent_default()
+            event.stop()
+            return True
+        if event.key == "shift+tab":
+            self.navigate(-1)
+            event.prevent_default()
+            event.stop()
+            return True
+        if event.key == "escape":
+            self.hide()
+            event.stop()
+            return True
+        return False
+
+    def handle_list_selected(self, event: "ListView.Selected", callback: "Callable[[str], None]") -> bool:
+        if event.list_view.id != self._listview_id.lstrip("#"):
+            return False
+        tag = self.current_value()
+        if tag:
+            self.apply(tag, callback)
+        event.stop()
+        return True
+
 
 
 # ── GroupNameModal ─────────────────────────────────────────────────────────────

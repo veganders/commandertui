@@ -111,48 +111,14 @@ class SearchScreen(Screen[str]):
         inp.focus()
 
     def on_input_changed(self, event: Input.Changed) -> None:
-        if event.input.id != "srch-input":
-            return
-        self._suggestions.update(event.input.value, event.input.cursor_position)
-
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        if event.input.id != "srch-input":
-            return
-        self._suggestions.hide()
+        self._suggestions.handle_input_changed(event)
 
     def on_query_input_debounced(self, event: QueryInput.Debounced) -> None:
-        if event.input.id != "srch-input":
-            return
-        if event.from_submit:
-            self._suggestions.hide()
-        self._run_search(event.value)
+        self._suggestions.handle_debounced(event, self._run_search)
 
     def on_key(self, event) -> None:
-        inp = self.query_one("#srch-input", QueryInput)
-
-        if self._suggestions.visible and self.focused is inp:
-            if event.key == "enter":
-                tag = self._suggestions.current_value()
-                if tag:
-                    self._suggestions.apply(tag, self._run_search)
-                event.stop()
-                return
-            if event.key == "tab":
-                self._suggestions.navigate(+1)
-                event.prevent_default()
-                event.stop()
-                return
-            if event.key == "shift+tab":
-                self._suggestions.navigate(-1)
-                event.prevent_default()
-                event.stop()
-                return
-            if event.key == "escape":
-                self._suggestions.hide()
-                event.stop()
-                return
-
-        # Down/tab from input moves to result list (only when suggestions are hidden)
+        if self._suggestions.handle_key(event, self._run_search):
+            return
         if event.key in ("down", "tab") and isinstance(self.focused, Input):
             if not self._suggestions.visible:
                 lv = self.query_one("#srch-list", ListView)
@@ -170,12 +136,7 @@ class SearchScreen(Screen[str]):
         self.query_one(CardDetail).show_card(card, self._db, self._deck, self._settings)
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
-        if event.list_view.id != "srch-suggest":
-            return
-        tag = self._suggestions.current_value()
-        if tag:
-            self._suggestions.apply(tag, self._run_search)
-        event.stop()
+        self._suggestions.handle_list_selected(event, self._run_search)
 
     def on_card_detail_printing_selected(self, msg: CardDetail.PrintingSelected) -> None:
         entry = self._deck.get_entry_for_card(msg.oracle_id)
@@ -324,7 +285,7 @@ class SearchScreen(Screen[str]):
             if self._deck.commander and self._deck.commander.card.oracle_id == card.oracle_id:
                 new_cmd: CardEntry | None = None
             else:
-                new_cmd = CardEntry(card=card, role=CardRole.COMMANDER)
+                new_cmd = self._deck.make_entry(card, CardRole.COMMANDER)
             self._deck.commander = new_cmd
             if self._deck.partner is not None:
                 info = partner_mode(new_cmd.card) if new_cmd else None
@@ -336,7 +297,7 @@ class SearchScreen(Screen[str]):
             if self._deck.partner and self._deck.partner.card.oracle_id == card.oracle_id:
                 self._deck.partner = None
             else:
-                self._deck.partner = CardEntry(card=card, role=CardRole.PARTNER)
+                self._deck.partner = self._deck.make_entry(card, CardRole.PARTNER)
         elif self._mode == MODE_GROUP:
             if self._deck.count_of(card.oracle_id) > 0:
                 self._deck.remove_all(card.oracle_id)

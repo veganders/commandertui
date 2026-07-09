@@ -16,6 +16,7 @@ from db import Card, CardDB, load_db, parse_query
 from deck_io import list_decks, load_deck, save_deck
 from models import MAYBEBOARD, CardEntry, CardRole, Deck, Group
 from partner import partner_mode, partner_filter
+from color_scout import ColorScoutScreen
 from search import MODE_COMMANDER, MODE_GROUP, MODE_PARTNER, SearchScreen
 from settings import Settings
 from sorting import CardSorter, MVSorter, NameSorter, PriceSorter
@@ -100,6 +101,7 @@ class DeckbuilderApp(App):
         Binding("ctrl+o", "open_deck", "Open"),
         Binding("+", "increment_card", "+1"),
         Binding("-", "decrement_card", "-1"),
+        Binding("x", "color_scout", "Color Scout"),
     ]
 
     def __init__(self, db: CardDB, deck: Deck, settings: Settings) -> None:
@@ -442,6 +444,18 @@ class DeckbuilderApp(App):
             self.notify(f"Opened: {self._deck.name or path.stem}")
 
         self.push_screen(OpenDeckScreen(paths), callback=on_path)
+
+    def action_color_scout(self) -> None:
+        def on_done(_) -> None:
+            self._rebuild_tree()
+            self.query_one(TopBar).refresh_display()
+        self.push_screen(
+            ColorScoutScreen(
+                self._db, self._deck, self._settings, self._filter_candidates,
+                group=self._group_for_cursor(),
+            ),
+            callback=on_done,
+        )
 
     def action_search_partner(self) -> None:
         commander = self._deck.commander

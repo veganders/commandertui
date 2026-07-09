@@ -139,7 +139,7 @@ The expansion is done once at load time via a memoised recursive `_all_labels(ta
 | bare word | name substring |
 | `t:type` | type line word-boundary match (`t:rat` matches Rat but not Pirate) |
 | `o:"text"` | oracle text substring (quotes allow spaces) |
-| `id:wubrg` | color identity is a **subset** of the given colors |
+| `id:wubrg` | color identity is a **subset** of the given colors; `id:c` means colorless (Scryfall-consistent — `C` is filtered out of WUBRG, leaving an empty set that only colorless cards satisfy) |
 | `c:rg` | card colors include **at least** red and green |
 | `otag:ramp` | oracle tag exact match (matches ancestors — see above) |
 | `kw:partner` | keyword substring (matches entries in `card.keywords`) |
@@ -230,6 +230,7 @@ Save format:
 | `ctrl+o` | Open saved deck (shows list sorted by most-recently-modified) |
 | `+` | Increment copy count for the focused card (only if `card.allows_multiple()`) |
 | `-` | Decrement copy count for the focused card |
+| `x` | Open Color Scout (explore card counts by color identity) |
 | `q` | Quit |
 
 ---
@@ -262,7 +263,7 @@ When the user types a supported filter prefix (`otag:`, `t:`, `kw:`) in the sear
 
 - **`_filter_token_context(value, pos, prefixes) -> tuple[int, int, str, str] | None`** — scans left from cursor to find the current token, checks for any of the given prefixes (with optional leading `-`), handles quoted and unquoted forms. Returns `(token_start, token_end, partial, matched_prefix)` or `None` if not in a matching token or the token is already complete (closing `"` present).
 
-- **`FilterSuggestions`** — manages a dropdown for a `QueryInput` + `ListView` pair. Takes `candidates: dict[str, list[str]]` mapping each prefix to its completion list. `update(value, pos)` detects the active prefix and filters candidates; `apply(value, callback)` replaces the token, appends a trailing space if the character after the replaced range isn't already one (prevents the dropdown from immediately reopening), and optionally calls back with the new query; `navigate(direction)` handles Tab/Shift+Tab cycling; `current_value()` returns the highlighted entry. Used by both `SearchScreen` (`#srch-suggest`) and `DeckbuilderApp` (`#deck-suggest`).
+- **`FilterSuggestions`** — manages a dropdown for a `QueryInput` + `ListView` pair. Takes `candidates: dict[str, list[str]]` mapping each prefix to its completion list. Core methods: `update(value, pos)` detects the active prefix and filters candidates; `apply(value, callback)` replaces the token, appends a trailing space if the character after the replaced range isn't already one (prevents the dropdown from immediately reopening), and optionally calls back with the new query; `navigate(direction)` handles Tab/Shift+Tab cycling; `current_value()` returns the highlighted entry. Convenience handler methods — call these from screen `on_*` methods to share logic without duplication: `handle_input_changed(event)`, `handle_debounced(event, callback)`, `handle_key(event, callback)` (returns True if consumed), `handle_list_selected(event, callback)` (returns True if consumed). Used by `SearchScreen` (`#srch-suggest`), `ColorScoutScreen` (`#cs-suggest`), and `DeckbuilderApp` (`#deck-suggest`).
 
 - **`build_filter_candidates(db) -> dict[str, list[str]]`** — builds all three candidate lists in one pass. **Call once per session** (in `DeckbuilderApp.on_mount`); store the result in `self._filter_candidates` and pass it to every `SearchScreen` via the `filter_candidates=` constructor argument. `SearchScreen.on_mount` no longer recomputes it. Candidate sources:
   - `otag:` → all ancestor-expanded tag labels from `db.tags`
@@ -301,6 +302,27 @@ When the user types a supported filter prefix (`otag:`, `t:`, `kw:`) in the sear
 `DeckbuilderApp._deck_filter: str` stores the current filter value. `_rebuild_tree()` calls `self._db.query(parse_query(self._deck_filter))` to get matching oracle_ids, then filters all entries (including commander/partner) against that set. `on_query_input_debounced` updates `_deck_filter` and rebuilds.
 
 Invalid filter syntax turns the input red (`query-error` class) — same behaviour as the search screen. The filter uses the full search syntax (mv, otag, eur, etc.).
+
+---
+
+## Color Scout (`color_scout.py`)
+
+Opened with `x` from the main window. A pre-deckbuilding exploration tool: enter a search query and see how many matching cards are playable in each of the 32 color identities (all subsets of WUBRG, plus colorless), sorted by count descending.
+
+**Playable-within semantics**: a card is counted for an identity if `card.color_identity ⊆ identity`. A mono-green card counts for Golgari, Simic, Five-Color, etc. This answers "if I build this identity, how many cards support my theme?"
+
+**Identity coverage**: all 32 combinations are always shown (including zero-count ones). Named identities:
+- Mono: White / Blue / Black / Red / Green
+- Two-color guilds: Azorius (WU), Dimir (UB), Rakdos (BR), Gruul (RG), Selesnya (WG), Orzhov (WB), Izzet (UR), Golgari (BG), Boros (WR), Simic (UG)
+- Three-color: Esper (WUB), Jeskai (WUR), Bant (WUG), Mardu (WBR), Abzan (WBG), Naya (WRG), Grixis (UBR), Sultai (UBG), Temur (URG), Jund (BRG)
+- Four-color: Non-Green (WUBR), Non-Red (WUBG), Non-Black (WURG), Non-Blue (WBRG), Non-White (UBRG)
+- Five-Color (WUBRG), Colorless (C)
+
+**Navigating to search**: pressing Enter on a row pushes `SearchScreen` in MODE_GROUP with `id:{identity} {query}` as the initial query. From there the user can browse the actual cards. Pressing Escape on `ColorScoutScreen` returns to the main window.
+
+**Autocomplete and input behavior**: identical to `SearchScreen` — same `QueryInput` delay (1.0 s), same `FilterSuggestions` dropdown, same Tab/Shift+Tab/Enter/Escape handling.
+
+`_ALL_IDENTITIES` and `_identity_str()` live in `color_scout.py`. `_identity_str` returns letters in WUBRG order, or `"C"` for the empty set.
 
 ---
 

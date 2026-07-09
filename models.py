@@ -75,12 +75,16 @@ class Deck:
         entry = self.entries.get(oracle_id)
         return entry.count if entry else 0
 
+    def make_entry(self, card: Card, role: CardRole = CardRole.MAIN) -> CardEntry:
+        """Create a CardEntry, consuming any cached printing selection for this card."""
+        printing_idx = self.selected_printings.pop(card.oracle_id, 0)
+        return CardEntry(card=card, role=role, printing_idx=printing_idx)
+
     def add(self, card: Card) -> None:
         if card.oracle_id in self.entries:
             self.entries[card.oracle_id].count += 1
         else:
-            printing_idx = self.selected_printings.pop(card.oracle_id, 0)
-            self.entries[card.oracle_id] = CardEntry(card=card, printing_idx=printing_idx)
+            self.entries[card.oracle_id] = self.make_entry(card)
 
     def remove_one(self, oracle_id: str) -> None:
         """Decrement count; removes entry (and all group memberships) when count hits 0."""
