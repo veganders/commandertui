@@ -154,7 +154,7 @@ def _filter_token_context(
     for i, ch in enumerate(before):
         if ch == '"':
             in_quote = not in_quote
-        elif ch == ' ' and not in_quote:
+        elif ch in (' ', '(') and not in_quote:
             token_start = i + 1
     token = before[token_start:]
     stripped = token.lstrip('-')

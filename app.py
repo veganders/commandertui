@@ -307,7 +307,7 @@ class DeckbuilderApp(App):
         )
 
     def action_search_cards(self) -> None:
-        self._push_search(MODE_GROUP, group=self._group_for_cursor())
+        self._push_search(MODE_GROUP)
 
     def action_search_commander(self) -> None:
         self._push_search(MODE_COMMANDER)
@@ -452,10 +452,7 @@ class DeckbuilderApp(App):
             self._rebuild_tree()
             self.query_one(TopBar).refresh_display()
         self.push_screen(
-            ColorScoutScreen(
-                self._db, self._deck, self._settings, self._filter_candidates,
-                group=self._group_for_cursor(),
-            ),
+            ColorScoutScreen(self._db, self._deck, self._settings, self._filter_candidates),
             callback=on_done,
         )
 
