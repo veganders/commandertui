@@ -238,7 +238,7 @@ class FilterSuggestions:
             sugg.append(ListItem(Label(val)))
         sugg.styles.margin = (0, 0, 0, min(token_start + 2, 24))
         sugg.display = True
-        sugg.index = 0
+        sugg.call_after_refresh(lambda: setattr(sugg, 'index', 0))
 
     def apply(self, value: str, callback: Optional[Callable[[str], None]] = None) -> None:
         inp = self._inp()
