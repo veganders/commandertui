@@ -38,10 +38,10 @@ class DeckbuilderApp(App):
     #bottom { height: 1fr; }
     #groups-panel { width: 1fr; border-right: solid $primary; }
     #deck-search { width: 1fr; }
-    #deck-suggest {
+    .filter-suggest {
         display: none;
         height: auto;
-        max-height: 10;
+        max-height: 20;
         width: 44;
         background: $surface;
         border: solid $primary;
@@ -128,7 +128,7 @@ class DeckbuilderApp(App):
         with Horizontal(id="bottom"):
             with Vertical(id="groups-panel"):
                 yield QueryInput(placeholder="Filter deck…", id="deck-search", delay=0.4, select_on_focus=False)
-                yield ListView(id="deck-suggest")
+                yield ListView(id="deck-suggest", classes="filter-suggest")
                 yield Tree("Groups", id="groups")
             yield CardDetail()
         yield Footer()

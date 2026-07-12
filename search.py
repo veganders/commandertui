@@ -44,15 +44,7 @@ class SearchScreen(Screen[str]):
     #srch-input { width: 1fr; }
     QueryInput.query-error { background: $error 25%; }
     QueryInput.query-error:focus { background: $error 35%; }
-    #srch-suggest {
-        display: none;
-        height: auto;
-        max-height: 10;
-        width: 44;
-        background: $surface;
-        border: solid $primary;
-    }
-    #srch-bottom { height: 1fr; }
+#srch-bottom { height: 1fr; }
     #srch-list { width: 1fr; border-right: solid $primary; }
     SearchScreen CardDetail { width: 1fr; padding: 1 2; }
     .result-selected { color: $success; }
@@ -86,7 +78,7 @@ class SearchScreen(Screen[str]):
     def compose(self) -> ComposeResult:
         with Horizontal(id="srch-bar"):
             yield QueryInput(placeholder=self._placeholder(), id="srch-input", select_on_focus=False, delay=1.0)
-        yield ListView(id="srch-suggest")
+        yield ListView(id="srch-suggest", classes="filter-suggest")
         with Horizontal(id="srch-bottom"):
             yield ListView(id="srch-list")
             yield CardDetail()

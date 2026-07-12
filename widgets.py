@@ -221,7 +221,10 @@ class FilterSuggestions:
                 sugg.display = False
             return
         token_start, token_end, partial, prefix = ctx
-        matches = [v for v in self.candidates[prefix] if partial.lower() in v.lower()][:12]
+        low = partial.lower()
+        pool = [v for v in self.candidates[prefix] if low in v.lower()]
+        pool.sort(key=lambda v: (not v.lower().startswith(low), v.lower()))
+        matches = pool[:24]
         if not matches:
             if sugg.display:
                 sugg.display = False

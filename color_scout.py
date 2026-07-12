@@ -79,15 +79,7 @@ class ColorScoutScreen(Screen[None]):
     #cs-input { width: 1fr; }
     QueryInput.query-error { background: $error 25%; }
     QueryInput.query-error:focus { background: $error 35%; }
-    #cs-suggest {
-        display: none;
-        height: auto;
-        max-height: 10;
-        width: 44;
-        background: $surface;
-        border: solid $primary;
-    }
-    #cs-list { width: 1fr; }
+#cs-list { width: 1fr; }
     """
 
     def __init__(
@@ -116,7 +108,7 @@ class ColorScoutScreen(Screen[None]):
                 select_on_focus=False,
                 delay=1.0,
             )
-        yield ListView(id="cs-suggest")
+        yield ListView(id="cs-suggest", classes="filter-suggest")
         yield ListView(id="cs-list")
 
     def on_mount(self) -> None:
@@ -178,7 +170,7 @@ class ColorScoutScreen(Screen[None]):
         identity, _name, _count = self._results[idx]
         id_str = _identity_str(identity)
         query = self._query.strip()
-        full_query = f"id:{id_str} {query}".strip()
+        full_query = f"id:{id_str} ({query})" if query else f"id:{id_str}"
         self.app.push_screen(
             SearchScreen(
                 self._db, self._deck, self._settings, MODE_GROUP,
