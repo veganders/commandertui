@@ -156,6 +156,7 @@ The expansion is done once at load time via a memoised recursive `_all_labels(ta
 | `t:type` | type line word-boundary match (`t:rat` matches Rat but not Pirate) |
 | `o:"text"` | oracle text substring (quotes allow spaces) |
 | `id:wubrg` | color identity is a **subset** of the given colors; `id:c` means colorless (Scryfall-consistent — `C` is filtered out of WUBRG, leaving an empty set that only colorless cards satisfy) |
+| `id=ur` | color identity is **exactly** the given colors; `id=c` means exactly colorless |
 | `c:rg` | card colors include **at least** red and green |
 | `otag:ramp` | oracle tag exact match (matches ancestors — see above) |
 | `kw:partner` | keyword substring (matches entries in `card.keywords`) |

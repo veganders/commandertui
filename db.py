@@ -245,7 +245,7 @@ class Not:
 
 QueryNode = Union[Atom, And, Or, Not]
 
-_FILTER_CMP_RE = re.compile(r'^(mv|eur|usd|tix|power|toughness)([<>]=?|=)(.+)$', re.IGNORECASE)
+_FILTER_CMP_RE = re.compile(r'^(mv|eur|usd|tix|power|toughness|id)([<>]=?|=)(.+)$', re.IGNORECASE)
 _VALUE_CMP_RE = re.compile(r'^([<>]=?|=)(.+)$')
 _CMP_OPS: dict = {
     '=': float.__eq__, '<': float.__lt__, '>': float.__gt__,
@@ -367,12 +367,13 @@ def _eval_atom(atom: Atom, card: Card, tags: list[str]) -> bool:
         case 't' | 'type':
             return bool(re.search(r'\b' + re.escape(value.lower()) + r'\b', card.type_line.lower()))
         case 'id':
-            if value.lower() == 'c':
-                return not card.color_identity
-            color_set = {ch.upper() for ch in value if ch.upper() in "WUBRG"}
-            if not color_set:
+            m = _VALUE_CMP_RE.match(value)
+            op, raw = (m.group(1), m.group(2)) if m else (None, value)
+            target = set() if raw.lower() == 'c' else {ch.upper() for ch in raw if ch.upper() in "WUBRG"}
+            if not target and raw.lower() != 'c':
                 return False
-            return set(card.color_identity) <= color_set
+            card_ci = set(card.color_identity)
+            return card_ci == target if op == '=' else card_ci <= target
         case 'c':
             color_set = {ch.upper() for ch in value if ch.isalpha()}
             return color_set <= set(card.colors)
