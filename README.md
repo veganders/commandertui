@@ -79,6 +79,14 @@ python app.py
 | `-t:land` | Negate any filter |
 | `AND` / `OR` / `()` | Boolean logic |
 
+## About
+
+This project was vibe-coded as a personal experiment to test [Claude](https://claude.ai) as a coding assistant. Code quality might vary, but I've tried to fix weird code when I've seen it. For this project though, the end result have been more important than the actual code.
+
+## Contributions
+
+I don't really want contributions to this project. I made the tool I want to use myself and whenever I feel like something is missing or annoys me I just fix it. If you have ideas you want added, feel free to suggest them and if I like it I might add it. If you can't wait for me do stuff, feel free to fork it and make the changes yourself.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
