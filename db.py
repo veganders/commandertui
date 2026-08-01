@@ -7,6 +7,8 @@ from rich.text import Text
 from pathlib import Path
 from typing import Optional, Union
 
+from scryfall import load_bulk
+
 DATA_DIR = Path(__file__).parent / "data"
 
 # Layouts where oracle_text and mana_cost live inside card_faces, not at top level.
@@ -29,7 +31,6 @@ class Card:
     power: Optional[str]
     toughness: Optional[str]
     loyalty: Optional[str]
-    image_uri: Optional[str]
     printings: list["Printing"] = field(default_factory=list)
     faces: list[tuple[str, str]] = field(default_factory=list)  # (name, mana_cost) per face
 
@@ -108,10 +109,6 @@ def _parse_card(raw: dict) -> Optional[Card]:
         raw_faces = raw["card_faces"]
         oracle_text = " // ".join(f.get("oracle_text", "") for f in raw_faces)
         mana_cost = raw_faces[0].get("mana_cost", raw.get("mana_cost", ""))
-        image_uri = (
-            raw_faces[0].get("image_uris", {}).get("normal")
-            or raw.get("image_uris", {}).get("normal")
-        )
         # Store per-face data only when multiple faces carry their own mana costs
         # (split, modal_dfc, adventure). Transform/flip have only one face with a cost.
         if any(f.get("mana_cost") for f in raw_faces[1:]):
@@ -121,7 +118,6 @@ def _parse_card(raw: dict) -> Optional[Card]:
     else:
         oracle_text = raw.get("oracle_text", "")
         mana_cost = raw.get("mana_cost", "")
-        image_uri = raw.get("image_uris", {}).get("normal")
         faces = []
 
     return Card(
@@ -139,7 +135,6 @@ def _parse_card(raw: dict) -> Optional[Card]:
         power=raw.get("power"),
         toughness=raw.get("toughness"),
         loyalty=raw.get("loyalty"),
-        image_uri=image_uri,
         printings=_extract_printings(raw),
         faces=faces,
     )
@@ -457,8 +452,7 @@ def load_db() -> CardDB:
     db = CardDB()
 
     print("Loading cards...")
-    with open(DATA_DIR / "default_cards.json") as f:
-        raw_cards: list[dict] = json.load(f)
+    raw_cards: list[dict] = load_bulk("default_cards")
 
     # First printing wins for card text/image; all printings accumulate prices.
     for raw in raw_cards:
@@ -475,8 +469,7 @@ def load_db() -> CardDB:
     print(f"  {len(db.cards)} commander-legal cards loaded")
 
     print("Loading rulings...")
-    with open(DATA_DIR / "rulings.json") as f:
-        raw_rulings: list[dict] = json.load(f)
+    raw_rulings: list[dict] = load_bulk("rulings")
 
     for r in raw_rulings:
         oid = r.get("oracle_id")
@@ -486,8 +479,7 @@ def load_db() -> CardDB:
     print(f"  {len(db.rulings)} cards with rulings")
 
     print("Loading oracle tags...")
-    with open(DATA_DIR / "oracle_tags.json") as f:
-        raw_tags: list[dict] = json.load(f)
+    raw_tags: list[dict] = load_bulk("oracle_tags")
 
     # Leaf tags: direct tag labels before ancestor expansion
     for tag in raw_tags:

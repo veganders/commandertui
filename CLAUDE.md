@@ -80,6 +80,8 @@ The override is shown in the deck tree as `[U]` etc. after the card name, saved/
 
 `Card.allows_multiple() -> bool` lives on the `Card` class in `db.py`. It returns True for basic lands (`"Basic" in type_line`) and cards whose oracle text contains `"a deck can have any number of cards named"`. Do not duplicate this check elsewhere.
 
+`_CARD_KEEP_FIELDS` and `_CARD_FACE_KEEP_FIELDS` in `scryfall.py` are whitelists applied to `default_cards` during download (via `_strip_card`). Only fields actually used by `_parse_card` / `_extract_printings` are kept; everything else (artist, flavor text, image URIs, legalities, purchase URIs, etc.) is discarded at sync time to keep the on-disk file small. If a new field is needed, add it to the appropriate whitelist and re-sync with `python scryfall.py --force`.
+
 `_SPLIT_LAYOUTS` in `db.py` lists layouts where `oracle_text` and `mana_cost` live inside `card_faces` rather than at the top level. Currently: `transform`, `modal_dfc`, `flip`, `split`, `adventure`, `battle`, `prepare`. When Scryfall introduces a new multi-face layout and cards show empty oracle text, add it here.
 
 `Card.display_label(currency, printing_idx) -> rich.text.Text` returns a formatted label: `[mana cost] Name [EUR: 1.23]`. For multi-face cards with mana costs on multiple faces it renders `[1R] Fire // [1U] Ice [EUR: 0.50]`. Returns a `Text` object (not a string) so brackets are always literal, never parsed as Rich markup.
