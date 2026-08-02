@@ -7,6 +7,7 @@ from typing import Callable, Optional
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
+from textual.screen import Screen
 from textual.widgets import Footer, Input, ListView, Tree
 
 from rich.text import Text
@@ -25,7 +26,7 @@ from widgets import CardDetail, CardGroupEditorScreen, DeckNameModal, ExportModa
 _EXPORTERS = [ArchidektExporter(), ClipboardExporter()]
 
 
-class DeckbuilderApp(App):
+class MainScreen(Screen):
     CSS = """
     TopBar {
         height: 5;
@@ -38,50 +39,9 @@ class DeckbuilderApp(App):
     #bottom { height: 1fr; }
     #groups-panel { width: 1fr; border-right: solid $primary; }
     #deck-search { width: 1fr; }
-    .filter-suggest {
-        display: none;
-        height: auto;
-        max-height: 20;
-        width: 44;
-        background: $surface;
-        border: solid $primary;
-    }
-    QueryInput.query-error { background: $error 25%; }
-    QueryInput.query-error:focus { background: $error 35%; }
     #groups { width: 1fr; }
     CardDetail { width: 1fr; padding: 1 2; }
     #cd-printing-label { margin-top: 1; color: $text-muted; }
-
-    Input {
-        border: none;
-        height: 1;
-        padding: 0 1;
-        background: $surface;
-    }
-    Input:focus {
-        border: none;
-        background: $panel;
-    }
-    QueryInput {
-        border: none;
-        height: 1;
-        padding: 0 1;
-        background: $surface;
-    }
-    QueryInput:focus {
-        border: none;
-        background: $panel;
-    }
-    SelectCurrent {
-        border: none;
-        height: 1;
-        padding: 0 1;
-        background: $surface;
-    }
-    SelectCurrent:focus {
-        border: none;
-        background: $panel;
-    }
     """
 
     BINDINGS = [
@@ -138,6 +98,9 @@ class DeckbuilderApp(App):
         self.query_one("#groups", Tree).focus()
         self._filter_candidates = build_filter_candidates(self._db)
         self._deck_suggestions = FilterSuggestions(self, "#deck-search", "#deck-suggest", self._filter_candidates)
+
+    def action_quit(self) -> None:
+        self.app.exit()
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id != "deck-search" or self._deck_suggestions is None:
@@ -296,7 +259,7 @@ class DeckbuilderApp(App):
             self._rebuild_tree()
             self.query_one(TopBar).refresh_display()
 
-        self.push_screen(
+        self.app.push_screen(
             SearchScreen(
                 self._db, self._deck, self._settings, mode,
                 group=group, post_filter=post_filter, title=title,
@@ -317,7 +280,7 @@ class DeckbuilderApp(App):
             if name:
                 self._deck.groups.append(Group(name=name))
                 self._rebuild_tree()
-        self.push_screen(GroupNameModal(), callback=on_name)
+        self.app.push_screen(GroupNameModal(), callback=on_name)
 
     def action_cycle_sort(self) -> None:
         self._sort_idx = (self._sort_idx + 1) % len(self._sorters())
@@ -333,7 +296,7 @@ class DeckbuilderApp(App):
             self._rebuild_tree()
             self.query_one(TopBar).refresh_display()
 
-        self.push_screen(CardGroupEditorScreen(node.data, self._deck), callback=on_done)
+        self.app.push_screen(CardGroupEditorScreen(node.data, self._deck), callback=on_done)
 
     def action_delete_node(self) -> None:
         node = self.query_one("#groups", Tree).cursor_node
@@ -405,7 +368,7 @@ class DeckbuilderApp(App):
             except Exception as e:
                 self.notify(str(e), severity="error")
 
-        self.push_screen(ExportModal(_EXPORTERS), callback=on_exporter)
+        self.app.push_screen(ExportModal(_EXPORTERS), callback=on_exporter)
 
     def action_new_deck(self) -> None:
         self._deck.__dict__.update(_fresh_deck().__dict__)
@@ -428,7 +391,7 @@ class DeckbuilderApp(App):
                 self._deck.save_path = path
                 self.query_one(TopBar).refresh_display()
                 self.notify(f"Saved: {path.name}")
-            self.push_screen(DeckNameModal(), callback=on_name)
+            self.app.push_screen(DeckNameModal(), callback=on_name)
 
     def action_open_deck(self) -> None:
         paths = list_decks()
@@ -445,13 +408,13 @@ class DeckbuilderApp(App):
             self.query_one(TopBar).refresh_display()
             self.notify(f"Opened: {self._deck.name or path.stem}")
 
-        self.push_screen(OpenDeckScreen(paths), callback=on_path)
+        self.app.push_screen(OpenDeckScreen(paths), callback=on_path)
 
     def action_color_scout(self) -> None:
         def on_done(_) -> None:
             self._rebuild_tree()
             self.query_one(TopBar).refresh_display()
-        self.push_screen(
+        self.app.push_screen(
             ColorScoutScreen(self._db, self._deck, self._settings, self._filter_candidates),
             callback=on_done,
         )
@@ -495,6 +458,60 @@ class DeckbuilderApp(App):
             post_filter=partner_filter(info),
             title=titles.get(info["type"]),
         )
+
+
+class DeckbuilderApp(App):
+    CSS = """
+    .filter-suggest {
+        display: none;
+        height: auto;
+        max-height: 20;
+        width: 44;
+        background: $surface;
+        border: solid $primary;
+    }
+    QueryInput.query-error { background: $error 25%; }
+    QueryInput.query-error:focus { background: $error 35%; }
+    Input {
+        border: none;
+        height: 1;
+        padding: 0 1;
+        background: $surface;
+    }
+    Input:focus {
+        border: none;
+        background: $panel;
+    }
+    QueryInput {
+        border: none;
+        height: 1;
+        padding: 0 1;
+        background: $surface;
+    }
+    QueryInput:focus {
+        border: none;
+        background: $panel;
+    }
+    SelectCurrent {
+        border: none;
+        height: 1;
+        padding: 0 1;
+        background: $surface;
+    }
+    SelectCurrent:focus {
+        border: none;
+        background: $panel;
+    }
+    """
+
+    def __init__(self, db: CardDB, deck: Deck, settings: Settings) -> None:
+        super().__init__()
+        self._db = db
+        self._deck = deck
+        self._settings = settings
+
+    def on_mount(self) -> None:
+        self.push_screen(MainScreen(self._db, self._deck, self._settings))
 
 
 def _fresh_deck() -> Deck:

@@ -8,7 +8,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
 from textual.screen import Screen
-from textual.widgets import Input, Label, ListItem, ListView
+from textual.widgets import Footer, Input, Label, ListItem, ListView
 
 from rich.text import Text
 from db import And, Atom, Card, CardDB, Not, parse_query, validate_query
@@ -82,6 +82,7 @@ class SearchScreen(Screen[str]):
         with Horizontal(id="srch-bottom"):
             yield ListView(id="srch-list")
             yield CardDetail()
+        yield Footer()
 
     def _placeholder(self) -> str:
         if self._title:

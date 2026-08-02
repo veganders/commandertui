@@ -8,7 +8,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
 from textual.screen import Screen
-from textual.widgets import Input, Label, ListItem, ListView
+from textual.widgets import Footer, Input, Label, ListItem, ListView
 
 from db import CardDB, parse_query
 from models import Deck, Group
@@ -110,6 +110,7 @@ class ColorScoutScreen(Screen[None]):
             )
         yield ListView(id="cs-suggest", classes="filter-suggest")
         yield ListView(id="cs-list")
+        yield Footer()
 
     def on_mount(self) -> None:
         self._run_search("")
