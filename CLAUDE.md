@@ -161,7 +161,7 @@ The expansion is done once at load time via a memoised recursive `_all_labels(ta
 | `id=ur` | color identity is **exactly** the given colors; `id=c` means exactly colorless |
 | `c:rg` | card colors include **at least** red and green |
 | `otag:ramp` | oracle tag exact match (matches ancestors — see above) |
-| `kw:partner` | keyword substring (matches entries in `card.keywords`) |
+| `kw:partner` | keyword exact match (case-insensitive; matches entries in `card.keywords`) |
 | `r:rare` | exact rarity |
 | `mv>=3` | mana value comparison (`=` `<` `>` `<=` `>=`) |
 | `power>=3` / `toughness<=5` | power/toughness comparison; `:` means `=`. Non-numeric values (e.g. `*`) count as 0, consistent with Scryfall. |
