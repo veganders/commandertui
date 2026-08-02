@@ -19,24 +19,27 @@ def partner_mode(card: Card) -> Optional[dict]:
       partner           → generic "Partner" keyword
     """
     kws = card.keywords
-    oracle = card.oracle_text
 
     if "Partner with" in kws:
-        m = re.search(r"Partner with ([^(\n]+)", oracle)
-        return {"type": "partner_with", "name": m.group(1).strip() if m else None}
+        for face in card.faces:
+            m = re.search(r"Partner with ([^(\n]+)", face.oracle_text)
+            if m:
+                return {"type": "partner_with", "name": m.group(1).strip()}
+        return {"type": "partner_with", "name": None}
 
     if "Doctor's companion" in kws:
         return {"type": "doctors_companion", "role": "companion"}
 
-    if "Time Lord Doctor" in card.type_line:
+    if card.has_type("Time Lord Doctor"):
         return {"type": "doctors_companion", "role": "doctor"}
 
     if "Choose a background" in kws:
         return {"type": "background"}
 
-    m = re.search(r"Partner—([^(]+?)\s*\(", oracle)
-    if m:
-        return {"type": "partner_variant", "mechanic": m.group(1).strip()}
+    for face in card.faces:
+        m = re.search(r"Partner—([^(]+?)\s*\(", face.oracle_text)
+        if m:
+            return {"type": "partner_variant", "mechanic": m.group(1).strip()}
 
     if "Partner" in kws:
         return {"type": "partner"}
@@ -51,18 +54,18 @@ def partner_filter(info: dict) -> Callable[[Card], bool]:
         return lambda c: (
             "Partner" in c.keywords
             and "Partner with" not in c.keywords
-            and not re.search(r"Partner—", c.oracle_text)
+            and not any(re.search(r"Partner—", f.oracle_text) for f in c.faces)
         )
     if t == "partner_with":
         name = info.get("name") or ""
         return lambda c, _n=name: c.name == _n
     if t == "partner_variant":
         tag = "Partner—" + info["mechanic"]
-        return lambda c, _t=tag: _t in c.oracle_text
+        return lambda c, _t=tag: c.has_oracle(_t)
     if t == "doctors_companion":
         if info.get("role") == "doctor":
             return lambda c: "Doctor's companion" in c.keywords
-        return lambda c: "Time Lord Doctor" in c.type_line
+        return lambda c: c.has_type("Time Lord Doctor")
     if t == "background":
-        return lambda c: "Background" in c.type_line
+        return lambda c: c.has_type("Background")
     return lambda c: True

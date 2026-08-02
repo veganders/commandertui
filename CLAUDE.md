@@ -69,22 +69,32 @@ The override is shown in the deck tree as `[U]` etc. after the card name, saved/
 2. `"Doctor's companion" in keywords` → `doctors_companion`
 3. `"Time Lord Doctor" in type_line` → `doctors_companion`
 4. `"Choose a background" in keywords` → `background`
-5. `re.search(r"Partner—([^(]+)", oracle_text)` → `partner_variant` (extract mechanic name)
+5. `re.search(r"Partner—([^(]+)", face.oracle_text)` for each face → `partner_variant` (extract mechanic name)
 6. `"Partner" in keywords` → `partner`
 
 ---
 
 ## Data model
 
+### CardFace
+
+`CardFace` (in `db.py`) holds all per-face data: `name`, `mana_cost`, `oracle_text`, `type_line`, `power`, `toughness`, `loyalty`. Every `Card` has at least one face; multi-face cards (split, transform, modal_dfc, adventure, etc.) have one `CardFace` per Scryfall face.
+
 ### Card
 
-`Card.allows_multiple() -> bool` lives on the `Card` class in `db.py`. It returns True for basic lands (`"Basic" in type_line`) and cards whose oracle text contains `"a deck can have any number of cards named"`. Do not duplicate this check elsewhere.
+`Card` stores only card-level fields: `oracle_id`, `name`, `cmc`, `colors`, `color_identity`, `keywords`, `rarity`, `layout`, `printings`, `faces`. Per-face data lives exclusively in `card.faces` — there are no `oracle_text`, `type_line`, `power`, `toughness`, `loyalty`, or `mana_cost` fields on `Card` itself.
 
-`_CARD_KEEP_FIELDS` and `_CARD_FACE_KEEP_FIELDS` in `scryfall.py` are whitelists applied to `default_cards` during download (via `_strip_card`). Only fields actually used by `_parse_card` / `_extract_printings` are kept; everything else (artist, flavor text, image URIs, legalities, purchase URIs, etc.) is discarded at sync time to keep the on-disk file small. If a new field is needed, add it to the appropriate whitelist and re-sync with `python scryfall.py --force`.
+`Card.has_type(text) -> bool` returns True if `text` appears in any face's `type_line`. `Card.has_oracle(text) -> bool` returns True if `text` appears in any face's `oracle_text`. Use these instead of accessing face fields directly when checking a simple substring across all faces.
 
-`_SPLIT_LAYOUTS` in `db.py` lists layouts where `oracle_text` and `mana_cost` live inside `card_faces` rather than at the top level. Currently: `transform`, `modal_dfc`, `flip`, `split`, `adventure`, `battle`, `prepare`. When Scryfall introduces a new multi-face layout and cards show empty oracle text, add it here.
+`Card.allows_multiple() -> bool` returns True for basic lands and cards whose oracle text contains `"a deck can have any number of cards named"`. Uses `has_type` and `has_oracle` internally. Do not duplicate this check elsewhere.
 
-`Card.display_label(currency, printing_idx) -> rich.text.Text` returns a formatted label: `[mana cost] Name [EUR: 1.23]`. For multi-face cards with mana costs on multiple faces it renders `[1R] Fire // [1U] Ice [EUR: 0.50]`. Returns a `Text` object (not a string) so brackets are always literal, never parsed as Rich markup.
+`_CARD_KEEP_FIELDS` and `_CARD_FACE_KEEP_FIELDS` in `scryfall.py` are whitelists applied to `default_cards` during download (via `_strip_card`). Only fields actually used by `_parse_card` / `_extract_printings` are kept; everything else (artist, flavor text, image URIs, legalities, purchase URIs, etc.) is discarded at sync time to keep the on-disk file small. `_CARD_FACE_KEEP_FIELDS` includes `name`, `mana_cost`, `oracle_text`, `type_line`, `power`, `toughness`, `loyalty`. If a new field is needed, add it to the appropriate whitelist and re-sync with `python scryfall.py --force`.
+
+`_SPLIT_LAYOUTS` in `db.py` lists layouts where face data lives inside `card_faces` rather than at the top level. Currently: `transform`, `modal_dfc`, `flip`, `split`, `adventure`, `battle`, `prepare`. For these layouts `_parse_card` builds one `CardFace` per Scryfall face. For all other layouts it builds a single `CardFace` from the top-level fields. When Scryfall introduces a new multi-face layout and cards show empty oracle text, add it here.
+
+`Card.display_label(currency, printing_idx) -> rich.text.Text` returns a formatted label: `[mana cost] Name [EUR: 1.23]`. For multi-face cards where multiple faces carry their own mana cost it renders `[1R] Fire // [1U] Ice [EUR: 0.50]`; for transform/flip cards (only front face has a cost) it renders `[U] Delver of Secrets // Insectile Aberration`. Returns a `Text` object (not a string) so brackets are always literal, never parsed as Rich markup.
+
+Search filters `o:`, `t:`, `power`, `toughness` loop over `card.faces` and match if **any** face satisfies the condition. This means `power>=10` matches a DFC whose back face is a 13/13.
 
 ### CardRole / CardEntry / Group / Deck
 
@@ -136,7 +146,7 @@ Key `Deck` helpers: `add(card)`, `remove_one(oracle_id)`, `remove_all(oracle_id)
 
 `Deck.all_entries() -> list[CardEntry]` returns commander + partner + all non-maybeboard entries, deduped by oracle_id. `card_count()`, `mana_curve()`, and `total_cost()` all use this, so maybeboard cards are automatically excluded from all three. `total_cost` uses `entry.price(currency)` directly.
 
-Mana curve excludes cards where every face is a land (`all("Land" in face for face in type_line.split(" // "))`). MDFCs with a non-land face (e.g. `"Sorcery // Land"`) are included.
+Mana curve excludes cards where every face is a land (`all("Land" in f.type_line for f in card.faces)`). MDFCs with a non-land face (e.g. a Sorcery // Land) are included.
 
 Cards with no group memberships appear in a dynamic **Uncategorized** node at the bottom of the tree (not a real Group — its tree node has `data=None`).
 

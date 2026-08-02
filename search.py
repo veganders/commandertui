@@ -143,7 +143,7 @@ class SearchScreen(Screen[str]):
     def _maybe_prompt_color_choice(
         self, entry: CardEntry, get_entry: Callable[[], Optional[CardEntry]]
     ) -> None:
-        if self._COLOR_CHOICE_TEXT not in entry.card.oracle_text.lower():
+        if not any(self._COLOR_CHOICE_TEXT in f.oracle_text.lower() for f in entry.card.faces):
             return
         def on_color(color: Optional[str]) -> None:
             if color and get_entry() is entry:
@@ -164,10 +164,10 @@ class SearchScreen(Screen[str]):
             results = [
                 c for c in results
                 if (
-                    "Legendary" in c.type_line
-                    and ("Creature" in c.type_line or "Planeswalker" in c.type_line)
+                    c.has_type("Legendary")
+                    and (c.has_type("Creature") or c.has_type("Planeswalker"))
                 )
-                or "can be your commander" in c.oracle_text.lower()
+                or c.has_oracle("can be your commander")
             ]
         elif self._mode == MODE_PARTNER and self._post_filter is not None:
             results = [c for c in results if self._post_filter(c)]

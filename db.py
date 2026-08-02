@@ -16,44 +16,56 @@ _SPLIT_LAYOUTS = {"transform", "modal_dfc", "flip", "split", "adventure", "battl
 
 
 @dataclass
+class CardFace:
+    name: str
+    mana_cost: str
+    oracle_text: str
+    type_line: str
+    power: Optional[str] = None
+    toughness: Optional[str] = None
+    loyalty: Optional[str] = None
+
+
+@dataclass
 class Card:
     oracle_id: str
     name: str
-    type_line: str
-    oracle_text: str
-    mana_cost: str
     cmc: float
     colors: list[str]
     color_identity: list[str]
     keywords: list[str]
     rarity: str
     layout: str
-    power: Optional[str]
-    toughness: Optional[str]
-    loyalty: Optional[str]
     printings: list["Printing"] = field(default_factory=list)
-    faces: list[tuple[str, str]] = field(default_factory=list)  # (name, mana_cost) per face
+    faces: list[CardFace] = field(default_factory=list)
+
+    def has_type(self, text: str) -> bool:
+        return any(text in f.type_line for f in self.faces)
+
+    def has_oracle(self, text: str) -> bool:
+        return any(text in f.oracle_text for f in self.faces)
 
     def allows_multiple(self) -> bool:
         return (
-            "Basic" in self.type_line
-            or "a deck can have any number of cards named" in self.oracle_text.lower()
+            self.has_type("Basic")
+            or self.has_oracle("a deck can have any number of cards named")
         )
 
     def display_label(self, currency: str, printing_idx: int) -> Text:
         """Returns a rich Text: mana cost, name, price — brackets are literal, not markup."""
         t = Text()
-        if self.faces:
-            for i, (face_name, face_mana) in enumerate(self.faces):
+        multi_mana = len(self.faces) > 1 and any(f.mana_cost for f in self.faces[1:])
+        if multi_mana:
+            for i, face in enumerate(self.faces):
                 if i > 0:
                     t.append(" // ")
-                mana = re.sub(r'[{}]', '', face_mana) if face_mana else ""
+                mana = re.sub(r'[{}]', '', face.mana_cost) if face.mana_cost else ""
                 if mana:
                     t.append(f"[{mana}]", style="dim")
                     t.append(" ")
-                t.append(face_name)
+                t.append(face.name)
         else:
-            mana = re.sub(r'[{}]', '', self.mana_cost) if self.mana_cost else ""
+            mana = re.sub(r'[{}]', '', self.faces[0].mana_cost) if self.faces and self.faces[0].mana_cost else ""
             if mana:
                 t.append(f"[{mana}]", style="dim")
                 t.append(" ")
@@ -106,35 +118,40 @@ def _parse_card(raw: dict) -> Optional[Card]:
     layout = raw.get("layout", "normal")
 
     if layout in _SPLIT_LAYOUTS and "card_faces" in raw:
-        raw_faces = raw["card_faces"]
-        oracle_text = " // ".join(f.get("oracle_text", "") for f in raw_faces)
-        mana_cost = raw_faces[0].get("mana_cost", raw.get("mana_cost", ""))
-        # Store per-face data only when multiple faces carry their own mana costs
-        # (split, modal_dfc, adventure). Transform/flip have only one face with a cost.
-        if any(f.get("mana_cost") for f in raw_faces[1:]):
-            faces = [(f.get("name", ""), f.get("mana_cost", "")) for f in raw_faces]
-        else:
-            faces = []
+        faces = [
+            CardFace(
+                name=f.get("name", ""),
+                mana_cost=f.get("mana_cost", ""),
+                oracle_text=f.get("oracle_text", ""),
+                type_line=f.get("type_line", ""),
+                power=f.get("power"),
+                toughness=f.get("toughness"),
+                loyalty=f.get("loyalty"),
+            )
+            for f in raw["card_faces"]
+        ]
     else:
-        oracle_text = raw.get("oracle_text", "")
-        mana_cost = raw.get("mana_cost", "")
-        faces = []
+        faces = [
+            CardFace(
+                name=raw.get("name", ""),
+                mana_cost=raw.get("mana_cost", ""),
+                oracle_text=raw.get("oracle_text", ""),
+                type_line=raw.get("type_line", ""),
+                power=raw.get("power"),
+                toughness=raw.get("toughness"),
+                loyalty=raw.get("loyalty"),
+            )
+        ]
 
     return Card(
         oracle_id=raw["oracle_id"],
         name=raw["name"],
-        type_line=raw.get("type_line", ""),
-        oracle_text=oracle_text,
-        mana_cost=mana_cost,
         cmc=raw.get("cmc", 0.0),
         colors=raw.get("colors", []),
         color_identity=raw.get("color_identity", []),
         keywords=raw.get("keywords", []),
         rarity=raw.get("rarity", ""),
         layout=layout,
-        power=raw.get("power"),
-        toughness=raw.get("toughness"),
-        loyalty=raw.get("loyalty"),
         printings=_extract_printings(raw),
         faces=faces,
     )
@@ -169,7 +186,7 @@ class CardDB:
 
         if type_line:
             q = type_line.lower()
-            results = (c for c in results if q in c.type_line.lower())
+            results = (c for c in results if any(q in f.type_line.lower() for f in c.faces))
 
         if tag:
             q = tag.lower()
@@ -180,7 +197,7 @@ class CardDB:
 
         if oracle_text:
             q = oracle_text.lower()
-            results = (c for c in results if q in c.oracle_text.lower())
+            results = (c for c in results if any(q in f.oracle_text.lower() for f in c.faces))
 
         if rarity:
             q = rarity.lower()
@@ -358,9 +375,11 @@ def _eval_atom(atom: Atom, card: Card, tags: list[str]) -> bool:
     key, value = atom.key, atom.value
     match key:
         case 'o' | 'oracle':
-            return value.lower() in card.oracle_text.lower()
+            q = value.lower()
+            return any(q in f.oracle_text.lower() for f in card.faces)
         case 't' | 'type':
-            return bool(re.search(r'\b' + re.escape(value.lower()) + r'\b', card.type_line.lower()))
+            pat = re.compile(r'\b' + re.escape(value.lower()) + r'\b')
+            return any(pat.search(f.type_line.lower()) for f in card.faces)
         case 'id':
             m = _VALUE_CMP_RE.match(value)
             op, raw = (m.group(1), m.group(2)) if m else (None, value)
@@ -392,14 +411,18 @@ def _eval_atom(atom: Atom, card: Card, tags: list[str]) -> bool:
                 threshold = float(num)
             except ValueError:
                 return False
-            stat = card.power if key == 'power' else card.toughness
-            if stat is None:
-                return False
-            try:
-                stat_val = float(stat)
-            except ValueError:
-                stat_val = 0.0  # non-numeric (e.g. "*") counts as 0, consistent with Scryfall
-            return _CMP_OPS.get(op, float.__eq__)(stat_val, threshold)
+            fn = _CMP_OPS.get(op, float.__eq__)
+            for face in card.faces:
+                stat = face.power if key == 'power' else face.toughness
+                if stat is None:
+                    continue
+                try:
+                    stat_val = float(stat)
+                except ValueError:
+                    stat_val = 0.0  # non-numeric (e.g. "*") counts as 0
+                if fn(stat_val, threshold):
+                    return True
+            return False
         case 'eur' | 'usd' | 'tix':
             m = _VALUE_CMP_RE.match(value)
             op, num = (m.group(1), m.group(2)) if m else ('=', value)
@@ -528,6 +551,6 @@ if __name__ == "__main__":
     # Quick sanity check
     results = db.search(name="sol ring")
     for c in results:
-        print(f"{c.name} | {c.mana_cost} | {c.type_line}")
+        print(f"{c.name} | {c.faces[0].mana_cost} | {c.faces[0].type_line}")
         for t in db.get_tags(c.oracle_id):
             print(f"  tag: {t}")

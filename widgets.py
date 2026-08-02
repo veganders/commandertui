@@ -119,7 +119,7 @@ def build_filter_candidates(db: "CardDB") -> "dict[str, list[str]]":
     """
     return {
         "otag:": sorted({t for tags in db.tags.values() for t in tags}),
-        "t:": sorted({w for c in db.cards.values() for w in extract_type_words(c.type_line)}),
+        "t:": sorted({w for c in db.cards.values() for f in c.faces for w in extract_type_words(f.type_line)}),
         "kw:": sorted({kw for c in db.cards.values() for kw in c.keywords}),
     }
 
@@ -850,17 +850,20 @@ class CardDetail(VerticalScroll):
 
     def _format(self, card: Card, db: CardDB) -> Text:
         t = Text()
-        t.append(card.name + "\n", style="bold")
-        if card.mana_cost:
-            t.append(card.mana_cost + "\n", style="yellow")
-        t.append(card.type_line + "\n", style="italic")
-        if card.power is not None:
-            t.append(f"{card.power}/{card.toughness}\n")
-        if card.loyalty is not None:
-            t.append(f"Loyalty: {card.loyalty}\n")
-        t.append("\n")
-        if card.oracle_text:
-            t.append(card.oracle_text + "\n")
+        for i, face in enumerate(card.faces):
+            if i > 0:
+                t.append("\n")
+            t.append(face.name + "\n", style="bold")
+            if face.mana_cost:
+                t.append(face.mana_cost + "\n", style="yellow")
+            t.append(face.type_line + "\n", style="italic")
+            if face.power is not None:
+                t.append(f"{face.power}/{face.toughness}\n")
+            if face.loyalty is not None:
+                t.append(f"Loyalty: {face.loyalty}\n")
+            t.append("\n")
+            if face.oracle_text:
+                t.append(face.oracle_text + "\n")
         tags = db.get_tags(card.oracle_id)
         if tags:
             t.append("\nTags\n", style="bold")

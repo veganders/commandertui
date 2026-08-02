@@ -36,7 +36,7 @@ _CARD_KEEP_FIELDS = frozenset({
     "card_faces", "finishes", "prices", "set", "set_name",
     "collector_number", "id",
 })
-_CARD_FACE_KEEP_FIELDS = frozenset({"name", "mana_cost", "oracle_text"})
+_CARD_FACE_KEEP_FIELDS = frozenset({"name", "mana_cost", "oracle_text", "type_line", "power", "toughness", "loyalty"})
 
 
 def _strip_card(card: dict) -> dict:
