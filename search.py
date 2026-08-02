@@ -264,7 +264,7 @@ class SearchScreen(Screen[str]):
         tags = {t.lower() for t in self._db.get_tags(card.oracle_id)}
         targets: list[Group] = []
 
-        if any("land" in face.lower() for face in card.type_line.split(" // ")):
+        if any("land" in f.type_line.lower() for f in card.faces):
             if "lands" in name_map:
                 targets.append(name_map["lands"])
 
