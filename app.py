@@ -8,7 +8,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
-from textual.widgets import Footer, Input, ListView, Tree
+from textual.widgets import Input, ListView, Tree
 
 from rich.text import Text
 from archidekt import ArchidektExporter
@@ -19,9 +19,10 @@ from models import MAYBEBOARD, CardEntry, CardRole, Deck, Group
 from partner import partner_mode, partner_filter
 from color_scout import ColorScoutScreen
 from search import MODE_COMMANDER, MODE_GROUP, MODE_PARTNER, SearchScreen
+from similar import SimilarCardsScreen
 from settings import Settings
 from sorting import CardSorter, MVSorter, NameSorter, PriceSorter
-from widgets import CardDetail, CardGroupEditorScreen, DeckNameModal, ExportModal, FilterSuggestions, GroupNameModal, OpenDeckScreen, QueryInput, TopBar, build_filter_candidates
+from widgets import CardDetail, CardGroupEditorScreen, DeckNameModal, ExportModal, FilterSuggestions, GroupNameModal, OpenDeckScreen, QueryInput, TopBar, WrappingFooter, build_filter_candidates
 
 _EXPORTERS = [ArchidektExporter(), ClipboardExporter()]
 
@@ -62,6 +63,7 @@ class MainScreen(Screen):
         Binding("+", "increment_card", "+1"),
         Binding("-", "decrement_card", "-1"),
         Binding("x", "color_scout", "Color Scout"),
+        Binding("f", "find_similar", "Find similar"),
     ]
 
     def __init__(self, db: CardDB, deck: Deck, settings: Settings) -> None:
@@ -91,7 +93,7 @@ class MainScreen(Screen):
                 yield ListView(id="deck-suggest", classes="filter-suggest")
                 yield Tree("Groups", id="groups")
             yield CardDetail()
-        yield Footer()
+        yield WrappingFooter()
 
     def on_mount(self) -> None:
         self._rebuild_tree()
@@ -223,7 +225,9 @@ class MainScreen(Screen):
 
     def on_tree_node_highlighted(self, event: Tree.NodeHighlighted) -> None:
         card = event.node.data if isinstance(event.node.data, Card) else None
-        self._current_card = card
+        if card is not self._current_card:
+            self._current_card = card
+            self.refresh_bindings()
         self.query_one(CardDetail).show_card(card, self._db, self._deck, self._settings)
 
     def on_top_bar_currency_changed(self, msg: TopBar.CurrencyChanged) -> None:
@@ -339,7 +343,7 @@ class MainScreen(Screen):
                 self._deck.commander is not None
                 and partner_mode(self._deck.commander.card) is not None
             )
-        if action in ("edit_card_groups", "toggle_maybeboard"):
+        if action in ("edit_card_groups", "toggle_maybeboard", "find_similar"):
             node = self.query_one("#groups", Tree).cursor_node
             return node is not None and isinstance(node.data, Card)
         return True
@@ -410,6 +414,22 @@ class MainScreen(Screen):
 
         self.app.push_screen(OpenDeckScreen(paths), callback=on_path)
 
+    def action_find_similar(self) -> None:
+        node = self.query_one("#groups", Tree).cursor_node
+        if node is None or not isinstance(node.data, Card):
+            return
+        card = node.data
+        if not self._db.get_leaf_tags(card.oracle_id):
+            self.notify(f"No oracle tags for '{card.name}' — cannot find similar cards.", severity="warning")
+            return
+        def on_done(_) -> None:
+            self._rebuild_tree()
+            self.query_one(TopBar).refresh_display()
+        self.app.push_screen(
+            SimilarCardsScreen(card, self._db, self._deck, self._settings),
+            callback=on_done,
+        )
+
     def action_color_scout(self) -> None:
         def on_done(_) -> None:
             self._rebuild_tree()
@@ -462,6 +482,7 @@ class MainScreen(Screen):
 
 class DeckbuilderApp(App):
     CSS = """
+    .result-selected { color: $success; }
     .filter-suggest {
         display: none;
         height: auto;

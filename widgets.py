@@ -12,9 +12,11 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.message import Message
+from textual.reactive import reactive
 from textual.screen import ModalScreen
 from textual.widget import Widget
 from textual.widgets import Input, Label, ListItem, ListView, Select, Static
+from textual.widgets._footer import FooterKey
 
 from db import Card, CardDB, parse_query, validate_query
 from exporter import DeckExporter
@@ -45,6 +47,126 @@ def fmt_price(price: Optional[float], currency: str) -> str:
         return "N/A"
     sym = CURRENCY_SYMBOLS.get(currency, "")
     return f"{sym}{price:.2f}"
+
+
+# ── WrappingFooter ────────────────────────────────────────────────────────────
+
+class WrappingFooter(Widget):
+    """A footer bar that wraps key bindings onto as many rows as needed.
+
+    Drop-in replacement for Textual's Footer.  Uses the same FooterKey widgets
+    and subscribes to the same bindings_updated_signal, but lays keys out in
+    multiple Horizontal rows instead of one scrollable row.
+
+    Row packing is recalculated on every resize event.  Each FooterKey's
+    estimated pixel width is: len(key_display) + len(description) + 5
+    (accounts for padding and margin from Textual's own FooterKey CSS).
+    """
+
+    DEFAULT_CSS = """
+    WrappingFooter {
+        dock: bottom;
+        height: auto;
+        layout: vertical;
+        background: $footer-description-background;
+    }
+    WrappingFooter > Horizontal {
+        height: 1;
+        width: 1fr;
+    }
+    WrappingFooter FooterKey {
+        margin: 0 1 0 0;
+        padding-left: 1;
+    }
+    WrappingFooter FooterKey.-command-palette {
+        dock: right;
+        margin: 0;
+        padding-left: 1;
+    }
+    """
+
+    _bindings_ready: reactive[bool] = reactive(False, repaint=False)
+
+    def on_mount(self) -> None:
+        self.screen.bindings_updated_signal.subscribe(self, self._on_bindings_changed)
+
+    def on_unmount(self) -> None:
+        self.screen.bindings_updated_signal.unsubscribe(self)
+
+    def _on_bindings_changed(self, screen) -> None:
+        self._bindings_ready = True
+        if self.is_attached and screen is self.screen:
+            self.call_after_refresh(self.recompose)
+
+    def _active_bindings(self) -> list[tuple[Binding, bool, str]]:
+        if not self._bindings_ready:
+            return []
+        seen: set[str] = set()
+        result = []
+        for _, binding, enabled, tooltip in self.screen.active_bindings.values():
+            if not binding.show or binding.action in seen:
+                continue
+            seen.add(binding.action)
+            result.append((binding, enabled, tooltip))
+        return result
+
+    def _command_palette_binding(self) -> Optional[tuple[Binding, bool, str]]:
+        if not getattr(self.app, "ENABLE_COMMAND_PALETTE", False):
+            return None
+        key = getattr(self.app, "COMMAND_PALETTE_BINDING", None)
+        if not key:
+            return None
+        try:
+            _, binding, enabled, tooltip = self.screen.active_bindings[key]
+            return binding, enabled, tooltip
+        except KeyError:
+            return None
+
+    def _rows(self, bindings: list[tuple[Binding, bool, str]]) -> list[list[tuple[Binding, bool, str]]]:
+        """Split bindings into rows that fit within the terminal width."""
+        width = self.app.size.width or 80
+        rows: list[list] = []
+        current_row: list = []
+        row_width = 0
+        for item in bindings:
+            binding, _, _ = item
+            # key padding/margin overhead per FooterKey (padding-left:1 + key pad 0 1 + desc pad 0 1 0 0 + margin 0 1 0 0)
+            key_w = len(self.app.get_key_display(binding)) + len(binding.description) + 5
+            if current_row and row_width + key_w > width:
+                rows.append(current_row)
+                current_row = [item]
+                row_width = key_w
+            else:
+                current_row.append(item)
+                row_width += key_w
+        if current_row:
+            rows.append(current_row)
+        return rows or [[]]
+
+    def _make_key(self, binding: Binding, enabled: bool, tooltip: str, classes: str = "") -> FooterKey:
+        return FooterKey(
+            binding.key,
+            self.app.get_key_display(binding),
+            binding.description,
+            binding.action,
+            disabled=not enabled,
+            tooltip=tooltip,
+            classes=classes,
+        )
+
+    def compose(self) -> ComposeResult:
+        rows = self._rows(self._active_bindings())
+        cmd = self._command_palette_binding()
+        for i, row in enumerate(rows):
+            with Horizontal():
+                for binding, enabled, tooltip in row:
+                    yield self._make_key(binding, enabled, tooltip)
+                if cmd and i == len(rows) - 1:
+                    yield self._make_key(*cmd, classes="-command-palette")
+
+    def on_resize(self) -> None:
+        if self._bindings_ready:
+            self.call_after_refresh(self.recompose)
 
 
 # ── QueryInput ────────────────────────────────────────────────────────────────
