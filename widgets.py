@@ -345,10 +345,10 @@ class FilterSuggestions:
         token_start, token_end, partial, prefix = ctx
         low = partial.lower()
         low_norm = _norm_tag(low)
-        pool = [v for v in self.candidates[prefix] if low in v.lower() or low_norm in _norm_tag(v)]
+        pool = [v for v in self.candidates[prefix] if low in v or low_norm in _norm_tag(v)]
         pool.sort(key=lambda v: (
-            not v.lower().startswith(low) and not _norm_tag(v).startswith(low_norm),
-            v.lower(),
+            not v.startswith(low) and not _norm_tag(v).startswith(low_norm),
+            v,
         ))
         matches = pool[:24]
         if not matches:
