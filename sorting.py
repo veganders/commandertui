@@ -10,28 +10,33 @@ if TYPE_CHECKING:
 
 
 class CardSorter(ABC):
-    label: str = ""
+    @property
+    @abstractmethod
+    def label(self) -> str: ...
 
     @abstractmethod
     def key(self, entry: "CardEntry") -> Any: ...
 
 
 class NameSorter(CardSorter):
-    label = "Name"
+    @property
+    def label(self) -> str: return "Name"
 
     def key(self, entry: "CardEntry") -> str:
         return entry.card.name.lower()
 
 
 class MVSorter(CardSorter):
-    label = "MV"
+    @property
+    def label(self) -> str: return "MV"
 
     def key(self, entry: "CardEntry") -> float:
         return entry.card.cmc
 
 
 class PriceSorter(CardSorter):
-    label = "Price"
+    @property
+    def label(self) -> str: return "Price"
 
     def __init__(self, currency: str) -> None:
         self._currency = currency

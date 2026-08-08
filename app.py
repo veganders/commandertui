@@ -21,6 +21,7 @@ from color_scout import ColorScoutScreen
 from search import MODE_COMMANDER, MODE_GROUP, MODE_PARTNER, SearchScreen
 from similar import SimilarCardsScreen
 from settings import Settings
+from grouping import CardGrouper, MVGrouper, NamedGrouper, TypeGrouper
 from sorting import CardSorter, MVSorter, NameSorter, PriceSorter
 from widgets import CardDetail, CardGroupEditorScreen, DeckNameModal, ExportModal, FilterSuggestions, GroupNameModal, OpenDeckScreen, QueryInput, TopBar, WrappingFooter, build_filter_candidates
 
@@ -55,6 +56,7 @@ class MainScreen(Screen):
         Binding("d", "delete_node", "Delete"),
         Binding("e", "edit_card_groups", "Edit groups"),
         Binding("o", "cycle_sort", "Sort"),
+        Binding("G", "cycle_group", "Grouping"),
         Binding("m", "toggle_maybeboard", "Maybeboard"),
         Binding("ctrl+e", "export_deck", "Export"),
         Binding("ctrl+n", "new_deck", "New"),
@@ -73,6 +75,7 @@ class MainScreen(Screen):
         self._settings = settings
         self._current_card: Optional[Card] = None
         self._sort_idx: int = 0
+        self._group_idx: int = 0
         self._last_search_query: str = ""
         self._deck_filter: str = ""
         self._deck_suggestions: Optional[FilterSuggestions] = None
@@ -84,6 +87,13 @@ class MainScreen(Screen):
     def _current_sorter(self) -> CardSorter:
         sorters = self._sorters()
         return sorters[self._sort_idx % len(sorters)]
+
+    def _groupers(self) -> list[CardGrouper]:
+        return [NamedGrouper(), TypeGrouper(), MVGrouper()]
+
+    def _current_grouper(self) -> CardGrouper:
+        groupers = self._groupers()
+        return groupers[self._group_idx % len(groupers)]
 
     def compose(self) -> ComposeResult:
         yield TopBar(self._deck, self._settings)
@@ -156,6 +166,7 @@ class MainScreen(Screen):
         tree.clear()
         currency = self._settings.currency
         sorter = self._current_sorter()
+        grouper = self._current_grouper()
 
         filter_ids: Optional[set[str]] = None
         if self._deck_filter.strip():
@@ -164,42 +175,35 @@ class MainScreen(Screen):
         def passes(entry: CardEntry) -> bool:
             return filter_ids is None or entry.card.oracle_id in filter_ids
 
+        _sym = {"usd": "$", "eur": "€", "tix": ""}
+        sym = _sym.get(currency, "")
+
+        def group_label(name: str, entries: list) -> str:
+            total_count = sum(e.count for e in entries)
+            subtotal = sum(
+                e.price(currency) * e.count
+                for e in entries if e.price(currency) is not None
+            )
+            price_str = f"  {sym}{subtotal:.2f}" if subtotal else ""
+            return f"{name}  ({total_count}){price_str}"
+
+        # Commander / Partner — always shown first in all grouping modes
         cmd_entries = [e for e in (self._deck.commander, self._deck.partner) if e and passes(e)]
         if cmd_entries:
             section_label = "Commander / Partner" if self._deck.partner else "Commander"
-            cmd_node = tree.root.add(section_label, expand=True, data=None)
+            cmd_node = tree.root.add(group_label(section_label, cmd_entries), expand=True, data=None)
             for entry in cmd_entries:
                 base = entry.card.display_label(currency, entry.printing_idx)
                 if entry.color_identity_override:
                     base = base + Text(f" [{''.join(entry.color_identity_override)}]", style="dim")
                 cmd_node.add_leaf(base, data=entry.card)
 
-        for group in self._deck.groups:
-            raw = self._deck.entries_for_group(group.name)
-            entries = sorted(
-                [e for e in raw if passes(e) and (group.name == MAYBEBOARD or not e.is_maybe())],
-                key=sorter.key,
-            )
-            if not entries and filter_ids is not None:
-                continue
-            total = sum(e.count for e in entries)
-            node = tree.root.add(f"{group.name}  ({total})", expand=True, data=group)
+        for name, entries, data in grouper.groups(self._deck, passes, sorter, has_filter=filter_ids is not None):
+            node = tree.root.add(group_label(name, entries), expand=True, data=data)
             for entry in entries:
                 base = entry.card.display_label(currency, entry.printing_idx)
-                label = Text(f"[{entry.count}] ") + base if entry.count > 1 else base
-                node.add_leaf(label, data=entry.card)
-
-        uncategorized = sorted(
-            [e for e in self._deck.uncategorized_entries() if not e.is_maybe() and passes(e)],
-            key=sorter.key,
-        )
-        if uncategorized:
-            total = sum(e.count for e in uncategorized)
-            node = tree.root.add(f"Uncategorized  ({total})", expand=True, data=None)
-            for entry in uncategorized:
-                base = entry.card.display_label(currency, entry.printing_idx)
-                label = Text(f"[{entry.count}] ") + base if entry.count > 1 else base
-                node.add_leaf(label, data=entry.card)
+                lbl = Text(f"[{entry.count}] ") + base if entry.count > 1 else base
+                node.add_leaf(lbl, data=entry.card)
 
         tree.root.expand()
         self.call_after_refresh(self._sync_detail_to_cursor)
@@ -290,6 +294,11 @@ class MainScreen(Screen):
         self._sort_idx = (self._sort_idx + 1) % len(self._sorters())
         self._rebuild_tree()
         self.notify(f"Sort: {self._current_sorter().label}")
+
+    def action_cycle_group(self) -> None:
+        self._group_idx = (self._group_idx + 1) % len(self._groupers())
+        self._rebuild_tree()
+        self.notify(f"Grouping: {self._current_grouper().label}")
 
     def action_edit_card_groups(self) -> None:
         node = self.query_one("#groups", Tree).cursor_node

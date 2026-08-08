@@ -57,6 +57,7 @@ python app.py
 | `e` | Edit card groups and count |
 | `m` | Toggle maybeboard |
 | `o` | Cycle sort order |
+| `G` | Cycle grouping (Named / Type / MV) |
 | `S` | Filter deck |
 | `ctrl+s` | Save deck |
 | `ctrl+o` | Open deck |

@@ -260,6 +260,7 @@ Save format:
 | `e` | On a card leaf: open `CardGroupEditorScreen` to toggle group memberships and adjust count |
 | `m` | On a card leaf: toggle maybeboard status (adds/removes from the Maybeboard group) |
 | `o` | Cycle sort order within groups (Name → MV → Price → Name …) |
+| `G` | Cycle grouping mode (Named → Type → MV → Named) |
 | `S` | Focus deck filter input (filters tree in place; stays active until manually cleared) |
 | `ctrl+e` | Export deck (opens exporter picker) |
 | `ctrl+n` | New deck — resets to initial state (five permanent groups, no cards) |
@@ -417,6 +418,24 @@ The printing `Select` in `CardDetail` encodes both the oracle_id and the printin
 This matters because Textual fires `Select.Changed` asynchronously: by the time the handler runs, the user may have already navigated to a different card, making any `_current_oracle_id` field stale. Encoding the identity in the value avoids that race entirely.
 
 `isinstance(event.value, _PrintingKey)` is the guard — blank/reset events from `set_options` produce `Select.BLANK`, which is not a `_PrintingKey` and is silently ignored.
+
+---
+
+## Grouping (`grouping.py`)
+
+Cards in the main deck tree can be grouped three ways, cycled with `G`:
+
+- **Named** (`NamedGrouper`) — user-defined groups in deck order, Uncategorized at the bottom. Group nodes carry a `Group` data object so the `d` key works normally.
+- **Type** (`TypeGrouper`) — one group per primary card type in the order: Creature, Instant, Sorcery, Artifact, Enchantment, Planeswalker, Battle, Land, Other. Type is determined by `card.has_type()` against each label in that priority order (first match wins). Maybeboard appended last.
+- **MV** (`MVGrouper`) — one group per exact mana value present in the deck (no cap — a deck with a 12-mana card gets an MV 12 bucket); pure lands separated into a Land group. Maybeboard appended last.
+
+All groups — including the Commander / Partner section — use `group_label()` in `_rebuild_tree`, which appends a price subtotal and card count when pricing data is available (e.g. `Ramp  (8)  €12.40`).
+
+Synthetic group nodes (Type and MV modes) have `data=None`, so `d` on a group node is a no-op in those modes. `d`, `e`, `m` on card leaf nodes work identically in all modes.
+
+`DeckbuilderApp._groupers()` returns `[NamedGrouper(), TypeGrouper(), MVGrouper()]`. Add new grouping strategies by appending to `_groupers()`.
+
+`label` is an abstract property on both `CardGrouper` and `CardSorter` — concrete subclasses must implement it as a `@property`.
 
 ---
 
