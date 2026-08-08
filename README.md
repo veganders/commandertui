@@ -72,6 +72,7 @@ python app.py
 | `sol ring` | Name substring |
 | `t:creature` | Type line |
 | `o:"draw a card"` | Oracle text |
+| `o:/regex/` | Oracle text regex |
 | `id:wubrg` | Color identity is a subset of the given colors |
 | `id=ur` | Color identity is exactly the given colors |
 | `otag:ramp` | Oracle tag |

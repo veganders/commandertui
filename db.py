@@ -284,9 +284,21 @@ def _tokenize(query: str) -> list[str]:
             if query[i] == '"':
                 i += 1
                 while i < n and query[i] != '"':
-                    i += 1
+                    if query[i] == '\\' and i + 1 < n and query[i + 1] == '"':
+                        i += 2  # \" — not a closing delimiter
+                    else:
+                        i += 1
                 if i < n:
                     i += 1  # closing quote
+            elif query[i] == '/':
+                i += 1
+                while i < n and query[i] != '/':
+                    if query[i] == '\\' and i + 1 < n and query[i + 1] == '/':
+                        i += 2  # \/ — not a closing delimiter
+                    else:
+                        i += 1
+                if i < n:
+                    i += 1  # closing /
             else:
                 i += 1
         tok = query[start:i]
@@ -305,7 +317,11 @@ def _parse_filter(token: str) -> QueryNode:
     if ':' in token:
         key, _, rest = token.partition(':')
         if len(rest) >= 2 and rest[0] == '"' and rest[-1] == '"':
-            rest = rest[1:-1]
+            rest = rest[1:-1].replace('\\"', '"')          # unescape \" inside quoted strings
+        elif rest.startswith('/') and rest.endswith('/') and len(rest) >= 2:
+            inner = rest[1:-1].replace('\\/', '/')         # unescape \/ → / inside regex
+            rest = f'/{inner}/'                            # store with /…/ marker
+            # Validity checked in _validate_atom; parse_query() stays non-raising.
         return Atom(key=key.lower(), value=rest)
     return Atom(key='name', value=token)
 
@@ -383,6 +399,12 @@ def _eval_atom(atom: Atom, card: Card, tags: list[str], tags_norm: frozenset[str
     key, value = atom.key, atom.value
     match key:
         case 'o' | 'oracle':
+            if value.startswith('/') and value.endswith('/') and len(value) >= 2:
+                try:
+                    pat = re.compile(value[1:-1], re.IGNORECASE)
+                    return any(pat.search(f.oracle_text) for f in card.faces)
+                except re.error:
+                    return False
             q = value.lower()
             return any(q in f.oracle_text.lower() for f in card.faces)
         case 't' | 'type':
@@ -464,6 +486,13 @@ def _validate_atom(atom: Atom) -> bool:
             float(num)
         except ValueError:
             return False
+    if atom.key in ('o', 'oracle'):
+        v = atom.value
+        if v.startswith('/') and v.endswith('/') and len(v) >= 2:
+            try:
+                re.compile(v[1:-1], re.IGNORECASE)
+            except re.error:
+                return False
     return True
 
 
