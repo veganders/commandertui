@@ -47,7 +47,7 @@ class Card:
 
     def allows_multiple(self) -> bool:
         return (
-            self.has_type("Basic")
+            self.has_type("basic")
             or self.has_oracle("a deck can have any number of cards named")
         )
 
@@ -123,7 +123,7 @@ def _parse_card(raw: dict) -> Optional[Card]:
                 name=f.get("name", ""),
                 mana_cost=f.get("mana_cost", ""),
                 oracle_text=f.get("oracle_text", ""),
-                type_line=f.get("type_line", ""),
+                type_line=f.get("type_line", "").lower(),
                 power=f.get("power"),
                 toughness=f.get("toughness"),
                 loyalty=f.get("loyalty"),
@@ -136,7 +136,7 @@ def _parse_card(raw: dict) -> Optional[Card]:
                 name=raw.get("name", ""),
                 mana_cost=raw.get("mana_cost", ""),
                 oracle_text=raw.get("oracle_text", ""),
-                type_line=raw.get("type_line", ""),
+                type_line=raw.get("type_line", "").lower(),
                 power=raw.get("power"),
                 toughness=raw.get("toughness"),
                 loyalty=raw.get("loyalty"),
@@ -149,7 +149,7 @@ def _parse_card(raw: dict) -> Optional[Card]:
         cmc=raw.get("cmc", 0.0),
         colors=raw.get("colors", []),
         color_identity=raw.get("color_identity", []),
-        keywords=raw.get("keywords", []),
+        keywords=[kw.lower() for kw in raw.get("keywords", [])],
         rarity=raw.get("rarity", ""),
         layout=layout,
         printings=_extract_printings(raw),
@@ -162,6 +162,7 @@ class CardDB:
     cards: dict[str, Card] = field(default_factory=dict)
     rulings: dict[str, list[str]] = field(default_factory=dict)
     tags: dict[str, list[str]] = field(default_factory=dict)        # expanded (incl. ancestors)
+    tags_norm: dict[str, frozenset[str]] = field(default_factory=dict)  # normalized expanded tags
     leaf_tags: dict[str, list[str]] = field(default_factory=dict)   # direct tags only
 
     def search(
@@ -186,7 +187,7 @@ class CardDB:
 
         if type_line:
             q = type_line.lower()
-            results = (c for c in results if any(q in f.type_line.lower() for f in c.faces))
+            results = (c for c in results if any(q in f.type_line for f in c.faces))
 
         if tag:
             q = tag.lower()
@@ -218,7 +219,9 @@ class CardDB:
         """Evaluate a parsed AST against all cards and return matches."""
         return [
             card for card in self.cards.values()
-            if _eval_node(node, card, self.tags.get(card.oracle_id, []))
+            if _eval_node(node, card,
+                          self.tags.get(card.oracle_id, []),
+                          self.tags_norm.get(card.oracle_id, frozenset()))
         ]
 
     def get_rulings(self, oracle_id: str) -> list[str]:
@@ -371,7 +374,12 @@ def parse_query(query: str) -> QueryNode:
     return parse_or() if tokens else And([])
 
 
-def _eval_atom(atom: Atom, card: Card, tags: list[str]) -> bool:
+def _norm_tag(s: str) -> str:
+    """Normalize a tag string for fuzzy matching: strip spaces and hyphens, lowercase."""
+    return s.replace(" ", "").replace("-", "").lower()
+
+
+def _eval_atom(atom: Atom, card: Card, tags: list[str], tags_norm: frozenset[str]) -> bool:
     key, value = atom.key, atom.value
     match key:
         case 'o' | 'oracle':
@@ -379,7 +387,7 @@ def _eval_atom(atom: Atom, card: Card, tags: list[str]) -> bool:
             return any(q in f.oracle_text.lower() for f in card.faces)
         case 't' | 'type':
             pat = re.compile(r'\b' + re.escape(value.lower()) + r'\b')
-            return any(pat.search(f.type_line.lower()) for f in card.faces)
+            return any(pat.search(f.type_line) for f in card.faces)
         case 'id':
             m = _VALUE_CMP_RE.match(value)
             op, raw = (m.group(1), m.group(2)) if m else (None, value)
@@ -392,9 +400,9 @@ def _eval_atom(atom: Atom, card: Card, tags: list[str]) -> bool:
             color_set = {ch.upper() for ch in value if ch.isalpha()}
             return color_set <= set(card.colors)
         case 'otag':
-            return value.lower() in {t.lower() for t in tags}
+            return _norm_tag(value) in tags_norm
         case 'kw' | 'keyword':
-            return any(value.lower() == kw.lower() for kw in card.keywords)
+            return value.lower() in card.keywords
         case 'r' | 'rarity':
             return card.rarity.lower() == value.lower()
         case 'mv':
@@ -437,15 +445,15 @@ def _eval_atom(atom: Atom, card: Card, tags: list[str]) -> bool:
             return value.lower() in card.name.lower()
 
 
-def _eval_node(node: QueryNode, card: Card, tags: list[str]) -> bool:
+def _eval_node(node: QueryNode, card: Card, tags: list[str], tags_norm: frozenset[str]) -> bool:
     if isinstance(node, Atom):
-        return _eval_atom(node, card, tags)
+        return _eval_atom(node, card, tags, tags_norm)
     if isinstance(node, And):
-        return all(_eval_node(c, card, tags) for c in node.children)
+        return all(_eval_node(c, card, tags, tags_norm) for c in node.children)
     if isinstance(node, Or):
-        return any(_eval_node(c, card, tags) for c in node.children)
+        return any(_eval_node(c, card, tags, tags_norm) for c in node.children)
     if isinstance(node, Not):
-        return not _eval_node(node.child, card, tags)
+        return not _eval_node(node.child, card, tags, tags_norm)
 
 
 def _validate_atom(atom: Atom) -> bool:
@@ -539,6 +547,10 @@ def load_db() -> CardDB:
 
     for oid, labels in tag_sets.items():
         db.tags[oid] = list(labels)
+    db.tags_norm = {
+        oid: frozenset(_norm_tag(l) for l in labels)
+        for oid, labels in db.tags.items()
+    }
 
     tagged_count = sum(1 for v in db.tags.values() if v)
     print(f"  {tagged_count} cards with oracle tags")

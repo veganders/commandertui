@@ -132,7 +132,7 @@ class Deck:
         buckets = [0] * 7
         for entry in self.all_entries():
             card = entry.card
-            if all("Land" in f.type_line for f in card.faces):
+            if all("land" in f.type_line for f in card.faces):
                 continue
             buckets[min(int(card.cmc), 6)] += entry.count
         return buckets

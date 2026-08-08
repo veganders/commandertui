@@ -20,20 +20,20 @@ def partner_mode(card: Card) -> Optional[dict]:
     """
     kws = card.keywords
 
-    if "Partner with" in kws:
+    if "partner with" in kws:
         for face in card.faces:
             m = re.search(r"Partner with ([^(\n]+)", face.oracle_text)
             if m:
                 return {"type": "partner_with", "name": m.group(1).strip()}
         return {"type": "partner_with", "name": None}
 
-    if "Doctor's companion" in kws:
+    if "doctor's companion" in kws:
         return {"type": "doctors_companion", "role": "companion"}
 
-    if card.has_type("Time Lord Doctor"):
+    if card.has_type("time lord doctor"):
         return {"type": "doctors_companion", "role": "doctor"}
 
-    if "Choose a background" in kws:
+    if "choose a background" in kws:
         return {"type": "background"}
 
     for face in card.faces:
@@ -41,7 +41,7 @@ def partner_mode(card: Card) -> Optional[dict]:
         if m:
             return {"type": "partner_variant", "mechanic": m.group(1).strip()}
 
-    if "Partner" in kws:
+    if "partner" in kws:
         return {"type": "partner"}
 
     return None
@@ -52,8 +52,8 @@ def partner_filter(info: dict) -> Callable[[Card], bool]:
     t = info["type"]
     if t == "partner":
         return lambda c: (
-            "Partner" in c.keywords
-            and "Partner with" not in c.keywords
+            "partner" in c.keywords
+            and "partner with" not in c.keywords
             and not any(re.search(r"Partner—", f.oracle_text) for f in c.faces)
         )
     if t == "partner_with":
@@ -64,8 +64,8 @@ def partner_filter(info: dict) -> Callable[[Card], bool]:
         return lambda c, _t=tag: c.has_oracle(_t)
     if t == "doctors_companion":
         if info.get("role") == "doctor":
-            return lambda c: "Doctor's companion" in c.keywords
-        return lambda c: c.has_type("Time Lord Doctor")
+            return lambda c: "doctor's companion" in c.keywords
+        return lambda c: c.has_type("time lord doctor")
     if t == "background":
-        return lambda c: c.has_type("Background")
+        return lambda c: c.has_type("background")
     return lambda c: True

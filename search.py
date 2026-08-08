@@ -39,7 +39,7 @@ def route_groups(card: Card, deck: Deck, db: CardDB) -> list[Group]:
     tags = {t.lower() for t in db.get_tags(card.oracle_id)}
     targets: list[Group] = []
 
-    if any("land" in f.type_line.lower() for f in card.faces):
+    if any("land" in f.type_line for f in card.faces):
         if "lands" in name_map:
             targets.append(name_map["lands"])
 
@@ -379,8 +379,8 @@ class SearchScreen(CardListScreen):
             results = [
                 c for c in results
                 if (
-                    c.has_type("Legendary")
-                    and (c.has_type("Creature") or c.has_type("Planeswalker"))
+                    c.has_type("legendary")
+                    and (c.has_type("creature") or c.has_type("planeswalker"))
                 )
                 or c.has_oracle("can be your commander")
             ]

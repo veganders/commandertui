@@ -18,7 +18,7 @@ from textual.widget import Widget
 from textual.widgets import Input, Label, ListItem, ListView, Select, Static
 from textual.widgets._footer import FooterKey
 
-from db import Card, CardDB, parse_query, validate_query
+from db import Card, CardDB, _norm_tag, parse_query, validate_query
 from exporter import DeckExporter
 from models import Deck, Group
 from settings import Settings
@@ -231,7 +231,7 @@ class QueryInput(Input):
 
 # Two-word creature/card types that must not be split. Extend this list when
 # a new multi-word type is introduced.
-_MULTIWORD_TYPES: list[str] = ["Time Lord"]
+_MULTIWORD_TYPES: list[str] = ["time lord"]
 
 
 def build_filter_candidates(db: "CardDB") -> "dict[str, list[str]]":
@@ -344,8 +344,12 @@ class FilterSuggestions:
             return
         token_start, token_end, partial, prefix = ctx
         low = partial.lower()
-        pool = [v for v in self.candidates[prefix] if low in v.lower()]
-        pool.sort(key=lambda v: (not v.lower().startswith(low), v.lower()))
+        low_norm = _norm_tag(low)
+        pool = [v for v in self.candidates[prefix] if low in v.lower() or low_norm in _norm_tag(v)]
+        pool.sort(key=lambda v: (
+            not v.lower().startswith(low) and not _norm_tag(v).startswith(low_norm),
+            v.lower(),
+        ))
         matches = pool[:24]
         if not matches:
             if sugg.display:
