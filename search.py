@@ -58,8 +58,14 @@ class CardListScreen(Screen):
 
     Hook methods to override in subclasses:
       _compose_header()        — widgets above the list+detail split (default: none)
+      _run_search(query)       — called when the search input settles; default is a no-op
       _card_count(card)        — copies currently "active" (drives the [+]/[N] prefix)
       _card_extra_prefix(card) — optional Text before the card label (e.g. a score)
+
+    Subclasses that add a search bar should set self._suggestions to a FilterSuggestions
+    instance in their __init__; the base event handlers (on_input_changed,
+    on_query_input_debounced, on_list_view_selected, on_key) all delegate to it
+    automatically when it is not None.
     """
 
     _LIST_ID = "card-list"
@@ -84,6 +90,7 @@ class CardListScreen(Screen):
         self._settings = settings
         self._results: list[Card] = []
         self._current_card: Optional[Card] = None
+        self._suggestions: Optional[FilterSuggestions] = None
 
     # ── layout ─────────────────────────────────────────────────────────────────
 
@@ -111,6 +118,10 @@ class CardListScreen(Screen):
         return ci
 
     # ── hooks ──────────────────────────────────────────────────────────────────
+
+    def _run_search(self, query: str) -> None:
+        """Called when the search input settles. Override in subclasses."""
+        pass
 
     def _card_count(self, card: Card) -> int:
         """How many copies of card are currently in the deck (drives [+]/[N] prefix)."""
@@ -179,6 +190,29 @@ class CardListScreen(Screen):
 
     # ── events ─────────────────────────────────────────────────────────────────
 
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if self._suggestions:
+            self._suggestions.handle_input_changed(event)
+
+    def on_query_input_debounced(self, event: QueryInput.Debounced) -> None:
+        if self._suggestions:
+            self._suggestions.handle_debounced(event, self._run_search)
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        if self._suggestions:
+            self._suggestions.handle_list_selected(event, self._run_search)
+
+    def on_key(self, event) -> None:
+        if self._suggestions and self._suggestions.handle_key(event, self._run_search):
+            return
+        if event.key in ("down", "tab") and isinstance(self.focused, Input):
+            if not (self._suggestions and self._suggestions.visible):
+                lv = self.query_one(f"#{self._LIST_ID}", ListView)
+                lv.focus()
+                if self._results:
+                    lv.index = 0
+                event.stop()
+
     def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
         if event.list_view.id != self._LIST_ID:
             return
@@ -197,7 +231,7 @@ class CardListScreen(Screen):
     # ── actions ────────────────────────────────────────────────────────────────
 
     def action_toggle_card(self) -> None:
-        if self._current_card is None:
+        if isinstance(self.focused, Input) or self._current_card is None:
             return
         card = self._current_card
         if self._deck.count_of(card.oracle_id) > 0:
@@ -211,7 +245,7 @@ class CardListScreen(Screen):
         self._refresh_results_for(card.oracle_id)
 
     def action_increment_card(self) -> None:
-        if self._current_card is None:
+        if isinstance(self.focused, Input) or self._current_card is None:
             return
         card = self._current_card
         if not card.allows_multiple():
@@ -226,14 +260,14 @@ class CardListScreen(Screen):
         self._refresh_results_for(card.oracle_id)
 
     def action_decrement_card(self) -> None:
-        if self._current_card is None:
+        if isinstance(self.focused, Input) or self._current_card is None:
             return
         if self._deck.count_of(self._current_card.oracle_id) > 0:
             self._deck.remove_one(self._current_card.oracle_id)
             self._refresh_results_for(self._current_card.oracle_id)
 
     def action_toggle_maybeboard(self) -> None:
-        if self._current_card is None:
+        if isinstance(self.focused, Input) or self._current_card is None:
             return
         card = self._current_card
         entry = self._deck.get_entry(card.oracle_id)
@@ -310,26 +344,6 @@ class SearchScreen(CardListScreen):
             inp.cursor_position = len(self._initial_query)
         self._run_search(self._initial_query)
         inp.focus()
-
-    def on_input_changed(self, event: Input.Changed) -> None:
-        self._suggestions.handle_input_changed(event)
-
-    def on_query_input_debounced(self, event: QueryInput.Debounced) -> None:
-        self._suggestions.handle_debounced(event, self._run_search)
-
-    def on_key(self, event) -> None:
-        if self._suggestions.handle_key(event, self._run_search):
-            return
-        if event.key in ("down", "tab") and isinstance(self.focused, Input):
-            if not self._suggestions.visible:
-                lv = self.query_one(f"#{self._LIST_ID}", ListView)
-                lv.focus()
-                if self._results:
-                    lv.index = 0
-                event.stop()
-
-    def on_list_view_selected(self, event: ListView.Selected) -> None:
-        self._suggestions.handle_list_selected(event, self._run_search)
 
     _COLOR_CHOICE_TEXT = "is your commander, choose a color before the game begins"
 

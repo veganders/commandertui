@@ -4,6 +4,8 @@
 
 - **DRY**: if the same logic appears more than once, extract it — a helper function, a method on the relevant class, or a shared constant. Do not repeat detection strings, pop patterns, or branching logic across commander/partner paths or other symmetric cases. Ask yourself where the logic *belongs* before writing it, not after.
 
+- **Base-class gravity**: when writing or modifying a child class, check whether the new or changed code could live in the base class instead. If two sibling classes share the same method body, event handler, or attribute initialisation, it belongs in the base. Apply this check proactively — don't wait to be asked.
+
 ---
 
 ## Partner / background commander logic

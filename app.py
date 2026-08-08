@@ -426,7 +426,8 @@ class MainScreen(Screen):
             self._rebuild_tree()
             self.query_one(TopBar).refresh_display()
         self.app.push_screen(
-            SimilarCardsScreen(card, self._db, self._deck, self._settings),
+            SimilarCardsScreen(card, self._db, self._deck, self._settings,
+                               filter_candidates=self._filter_candidates),
             callback=on_done,
         )
 
