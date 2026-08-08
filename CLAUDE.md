@@ -16,12 +16,12 @@ The `p` keybinding and any "Partner" label in the top bar must only be shown and
 
 | Case | Detection | Valid partners |
 |---|---|---|
-| **Generic Partner** | `"Partner" in keywords` AND no `"Partner with"` in keywords AND no `Partner—` in oracle_text | Any other generic-Partner card (same three conditions) |
-| **Partner with (specific)** | `"Partner with" in keywords` | Exactly one card; extract name with `re.search(r"Partner with ([^(\n]+)", oracle_text)` |
+| **Generic Partner** | `"partner" in keywords` AND no `"partner with"` in keywords AND no `Partner—` in oracle_text | Any other generic-Partner card (same three conditions) |
+| **Partner with (specific)** | `"partner with" in keywords` | Exactly one card; extract name with `re.search(r"Partner with ([^(\n]+)", oracle_text)` |
 | **Partner—X (pool variant)** | `re.search(r"Partner—([^(]+)", oracle_text)` matches | Any card whose oracle_text contains the **same** `Partner—X` string |
-| **Doctor's companion (Doctor side)** | `"Time Lord Doctor" in type_line` | Any card with `"Doctor's companion" in keywords` |
-| **Doctor's companion (Companion side)** | `"Doctor's companion" in keywords` | Any card with `"Time Lord Doctor" in type_line` |
-| **Choose a Background** | `"Choose a background" in keywords` (lowercase b — that's how Scryfall stores it) | Any card with `"Background" in type_line` |
+| **Doctor's companion (Doctor side)** | `"time lord doctor" in type_line` | Any card with `"doctor's companion" in keywords` |
+| **Doctor's companion (Companion side)** | `"doctor's companion" in keywords` | Any card with `"time lord doctor" in type_line` |
+| **Choose a Background** | `"choose a background" in keywords` | Any card with `"background" in type_line` |
 
 **Known Partner—X values in the current dataset** (detected automatically; do not hardcode):
 
@@ -42,9 +42,9 @@ Because new sets can introduce new `Partner—X` names, the implementation must 
 - These filters must be applied in the search post-filter, not just in placeholder text.
 - **Partner with**: do not open a search screen — look up the named card directly in the DB and set it immediately. Show a notification if the card is not found.
 
-### Helper function to implement
+### Helper function (`partner.py`)
 
-Add `partner_mode(card: Card) -> dict | None` (in `app.py` or a shared helpers module). Returns one of:
+`partner_mode(card: Card) -> dict | None` returns one of:
 
 ```python
 None                                          # no second commander allowed
@@ -55,7 +55,7 @@ None                                          # no second commander allowed
 {"type": "background"}                        # Background enchantments
 ```
 
-Use this in both the top bar rendering (show/hide the label) and the `action_search_partner` handler so the logic is not duplicated.
+Used in both the top bar rendering (show/hide the label) and the `action_search_partner` handler so the logic is not duplicated.
 
 ### Color-choosing commanders
 
@@ -67,12 +67,12 @@ The override is shown in the deck tree as `[U]` etc. after the card name, saved/
 
 ### Detection priority (in order — stop at first match)
 
-1. `"Partner with" in keywords` → `partner_with`
-2. `"Doctor's companion" in keywords` → `doctors_companion`
-3. `"Time Lord Doctor" in type_line` → `doctors_companion`
-4. `"Choose a background" in keywords` → `background`
+1. `"partner with" in keywords` → `partner_with`
+2. `"doctor's companion" in keywords` → `doctors_companion`
+3. `"time lord doctor" in type_line` → `doctors_companion`
+4. `"choose a background" in keywords` → `background`
 5. `re.search(r"Partner—([^(]+)", face.oracle_text)` for each face → `partner_variant` (extract mechanic name)
-6. `"Partner" in keywords` → `partner`
+6. `"partner" in keywords` → `partner`
 
 ---
 
@@ -82,11 +82,15 @@ The override is shown in the deck tree as `[U]` etc. after the card name, saved/
 
 `CardFace` (in `db.py`) holds all per-face data: `name`, `mana_cost`, `oracle_text`, `type_line`, `power`, `toughness`, `loyalty`. Every `Card` has at least one face; multi-face cards (split, transform, modal_dfc, adventure, etc.) have one `CardFace` per Scryfall face.
 
+`type_line` is stored **lowercase** (normalized at parse time). `oracle_text` keeps its original case — it is displayed to the user and searched case-insensitively at query time.
+
 ### Card
 
 `Card` stores only card-level fields: `oracle_id`, `name`, `cmc`, `colors`, `color_identity`, `keywords`, `rarity`, `layout`, `printings`, `faces`. Per-face data lives exclusively in `card.faces` — there are no `oracle_text`, `type_line`, `power`, `toughness`, `loyalty`, or `mana_cost` fields on `Card` itself.
 
-`Card.has_type(text) -> bool` returns True if `text` appears in any face's `type_line`. `Card.has_oracle(text) -> bool` returns True if `text` appears in any face's `oracle_text`. Use these instead of accessing face fields directly when checking a simple substring across all faces.
+`keywords` are stored **lowercase** (normalized at parse time). Pass lowercase strings when checking membership.
+
+`Card.has_type(text) -> bool` returns True if `text` appears in any face's `type_line`. Since `type_line` is lowercase, always pass a lowercase argument. `Card.has_oracle(text) -> bool` returns True if `text` appears in any face's `oracle_text`. Use these instead of accessing face fields directly when checking a simple substring across all faces.
 
 `Card.allows_multiple() -> bool` returns True for basic lands and cards whose oracle text contains `"a deck can have any number of cards named"`. Uses `has_type` and `has_oracle` internally. Do not duplicate this check elsewhere.
 
@@ -148,7 +152,7 @@ Key `Deck` helpers: `add(card)`, `remove_one(oracle_id)`, `remove_all(oracle_id)
 
 `Deck.all_entries() -> list[CardEntry]` returns commander + partner + all non-maybeboard entries, deduped by oracle_id. `card_count()`, `mana_curve()`, and `total_cost()` all use this, so maybeboard cards are automatically excluded from all three. `total_cost` uses `entry.price(currency)` directly.
 
-Mana curve excludes cards where every face is a land (`all("Land" in f.type_line for f in card.faces)`). MDFCs with a non-land face (e.g. a Sorcery // Land) are included.
+Mana curve excludes cards where every face is a land (`all("land" in f.type_line for f in card.faces)`). MDFCs with a non-land face (e.g. a Sorcery // Land) are included.
 
 Cards with no group memberships appear in a dynamic **Uncategorized** node at the bottom of the tree (not a real Group — its tree node has `data=None`).
 
@@ -159,6 +163,8 @@ Cards with no group memberships appear in a dynamic **Uncategorized** node at th
 Tags in `oracle_tags.json` form a parent–child hierarchy via `parent_ids`. During `load_db()` each card's tag set is expanded to include all ancestor labels (e.g. "mana rock" → "mana producer" → "ramp"). This means `otag:ramp` correctly matches mana rocks, mana dorks, land ramp spells, etc. without hardcoding child tag names.
 
 The expansion is done once at load time via a memoised recursive `_all_labels(tag_id)` helper defined inside `load_db()`. The stored `db.tags[oracle_id]` list already contains all ancestor labels. Leaf-only tags are stored separately in `db.leaf_tags[oracle_id]`. See also the [Oracle tag leaf vs. ancestor tags](#oracle-tag-leaf-vs-ancestor-tags) section below.
+
+`db.tags_norm[oracle_id]` is a pre-built `frozenset[str]` of the same expanded labels with spaces and hyphens stripped and lowercased (via `_norm_tag`). Used by `otag:` evaluation for O(1) normalized lookup — no per-query normalization cost.
 
 ---
 
@@ -172,8 +178,8 @@ The expansion is done once at load time via a memoised recursive `_all_labels(ta
 | `id:wubrg` | color identity is a **subset** of the given colors; `id:c` means colorless (Scryfall-consistent — `C` is filtered out of WUBRG, leaving an empty set that only colorless cards satisfy) |
 | `id=ur` | color identity is **exactly** the given colors; `id=c` means exactly colorless |
 | `c:rg` | card colors include **at least** red and green |
-| `otag:ramp` | oracle tag exact match (matches ancestors — see above) |
-| `kw:partner` | keyword exact match (case-insensitive; matches entries in `card.keywords`) |
+| `otag:ramp` | oracle tag match (matches ancestors — see above); spaces and hyphens are ignored, so `otag:manadork` and `otag:mana-dork` both match `mana dork` |
+| `kw:partner` | keyword match; stored lowercase so the check is case-insensitive in practice |
 | `r:rare` | exact rarity |
 | `mv>=3` | mana value comparison (`=` `<` `>` `<=` `>=`) |
 | `power>=3` / `toughness<=5` | power/toughness comparison; `:` means `=`. Non-numeric values (e.g. `*`) count as 0, consistent with Scryfall. |
@@ -191,7 +197,7 @@ When a card is toggled or incremented into the deck from the search screen (`spa
 
 | Condition | Target group |
 |---|---|
-| any face of `type_line` contains `"land"` (case-insensitive) | **Lands** |
+| any face of `type_line` contains `"land"` | **Lands** |
 | oracle tag exactly equals `"ramp"` | **Ramp** |
 | oracle tag exactly equals `"draw"` | **Draw** |
 | oracle tag exactly equals `"removal"` | **Interaction** |
@@ -301,9 +307,9 @@ When the user types a supported filter prefix (`otag:`, `t:`, `kw:`) in the sear
   - `t:` → `extract_type_words()` applied to every card's type line
   - `kw:` → all unique keyword strings from `card.keywords`
 
-- **`extract_type_words(type_line) -> set[str]`** — splits a type line into individual completion tokens. Replaces `—` with a space, strips `//` (split-card separator), and preserves entries in `_MULTIWORD_TYPES` as single tokens before splitting the remainder. Add new multi-word types to `_MULTIWORD_TYPES` in `widgets.py` (currently: `["Time Lord"]`).
+- **`extract_type_words(type_line) -> set[str]`** — splits a type line into individual completion tokens. Replaces `—` with a space, strips `//` (split-card separator), and preserves entries in `_MULTIWORD_TYPES` as single tokens before splitting the remainder. Add new multi-word types to `_MULTIWORD_TYPES` in `widgets.py` (currently: `["time lord"]`). Tokens are already lowercase since `type_line` is stored lowercase.
 
-- Values with spaces are wrapped in quotes on completion: `otag:"card draw"`, `kw:"Partner with"`. Values without spaces are unquoted.
+- Values with spaces are wrapped in quotes on completion: `otag:"card draw"`, `kw:"partner with"`. Values without spaces are unquoted.
 
 - `SearchScreen.on_query_input_debounced` uses `event.from_submit` to decide whether to close the dropdown: timer-fired debounce (`from_submit=False`) leaves it open; Enter (`from_submit=True`) closes it.
 
@@ -316,13 +322,60 @@ When the user types a supported filter prefix (`otag:`, `t:`, `kw:`) in the sear
 
 ---
 
-## Search screen (`search.py`) — misc
+## Card list screens (`search.py`)
 
-`SearchScreen` is typed `Screen[str]` and dismisses with the current query string. `DeckbuilderApp` stores this in `_last_search_query` and passes it back as `initial_query` the next time the group search screen is opened, so the query is remembered for the session. Commander and partner searches always open with an empty query.
+### `CardListScreen` base class
 
-`_sync_detail_to_cursor()` is called via `call_after_refresh` at the end of every `_rebuild_tree()`. This ensures the `CardDetail` panel always reflects the actual cursor position after a rebuild — Textual's `NodeHighlighted` event does not re-fire when the cursor index is unchanged but a different card is now at that position (e.g. after a card moves to another group).
+`CardListScreen` is the shared base for `SearchScreen` and `SimilarCardsScreen`. It provides:
+
+- A two-panel layout: scrollable `ListView` (`#card-list`) on the left, `CardDetail` on the right.
+- All shared event handlers: `on_input_changed` (autocomplete), `on_query_input_debounced` (search), `on_list_view_selected` (detail sync), `on_key` (autocomplete nav).
+- All card-manipulation actions: `action_toggle_card`, `action_increment_card`, `action_add_to_maybeboard`.
+- Hook methods subclasses override: `_compose_header()` (yields the title bar / search bar), `_run_search(query)` (executes the search and populates `self._results`), `_card_extra_prefix(card)` (optional Rich Text prefix shown before the card label).
+- `self._suggestions: Optional[FilterSuggestions]` — set by subclasses in `__init__`; all handlers guard with `if self._suggestions`.
+
+When writing a new card-list screen, subclass `CardListScreen`, set `self._suggestions` in `__init__`, override `_compose_header` and `_run_search`, and inherit everything else. Use `CSS = CardListScreen.CSS + """..."""` — Textual only loads `CSS` from the most-derived class, so subclass CSS must concatenate the base explicitly.
+
+### `SearchScreen`
+
+Typed `Screen[str]`; dismisses with the current query string. `DeckbuilderApp` stores this in `_last_search_query` and passes it back as `initial_query` the next time the group search screen is opened, so the query is remembered for the session. Commander and partner searches always open with an empty query.
+
+`_sync_detail_to_cursor()` is called via `call_after_refresh` at the end of every `_rebuild_list()`. This ensures the `CardDetail` panel always reflects the actual cursor position after a rebuild — Textual's `NodeHighlighted` event does not re-fire when the cursor index is unchanged but a different card is now at that position (e.g. after a card moves to another group).
 
 `on_input_changed` handles autocomplete suggestions (immediate, every keystroke). `on_query_input_debounced` handles the actual search (debounced via `QueryInput`).
+
+---
+
+## Find Similar (`similar.py`)
+
+`f` on a card in the main deck tree opens `SimilarCardsScreen` — a ranked list of the most similar cards in the database, scored by shared leaf oracle tags (tag-vector dot product).
+
+### Scoring
+
+`find_similar(card, db, color_identity, top_n, candidate_ids)`:
+- Builds a `target_tags` frozenset from the source card's **leaf** tags (directly assigned, not ancestors), excluding noise tags via `_is_noise_tag`.
+- Scores every candidate as `len(target_tags & candidate_leaf_tags)`. Cards with score 0 are excluded.
+- Returns up to `_TOP_N = 50` results sorted by descending score. Pass `top_n=None` to get all matches.
+- If `color_identity` is given, only cards whose `color_identity ⊆ identity` are scored (same semantics as `id:` filter).
+- If `candidate_ids` is given, only cards in that set are scored (used for filter-before-score mode).
+
+### Tag blacklist
+
+`_TAG_BLACKLIST` and `_is_noise_tag(tag)` exclude tags that describe card name or formatting rather than gameplay:
+
+- Static blacklist: `alliteration`, `namesake spell`, `single english word name`, `unique type line`
+- Dynamic: any tag containing `"errata"`, or starting with `"cycle-"`
+
+Extend `_TAG_BLACKLIST` or the dynamic conditions in `_is_noise_tag` as new noise patterns emerge.
+
+### Filter bar
+
+`SimilarCardsScreen` inherits the full `CardListScreen` search bar and autocomplete. The query is applied as a pre-filter (controlled by `_FILTER_BEFORE_SCORE: bool = True`):
+
+- `True` (default): filter candidate pool first, then score within it — top 50 are the best matches *among* cards passing the query.
+- `False`: score all cards first, then filter — top 50 are the best overall matches, minus cards failing the query.
+
+Flip `_FILTER_BEFORE_SCORE` at the top of `similar.py` to compare both strategies quickly. `_TOP_N` is the single source of truth for the cap.
 
 ---
 

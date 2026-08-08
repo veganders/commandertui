@@ -50,6 +50,7 @@ python app.py
 | `c` | Set commander |
 | `p` | Set partner / background |
 | `s` | Search cards |
+| `f` | Find similar cards to the focused card |
 | `x` | Color Scout — explore card counts by color identity |
 | `g` | New group |
 | `d` | Remove card / group |
