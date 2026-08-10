@@ -29,6 +29,7 @@ _TOP_N: int = 50
 _TAG_BLACKLIST: frozenset[str] = frozenset([
     "alliteration",              # 12.4% — card name happens to have alliterative words
     "namesake spell",            # 4.7%  — spell named after an existing character
+    "punny name",                #        — card name is a pun
     "single english word name",  # 3.9%  — card name is a single word
     "unique type line",          # 6.0%  — has a type line no other card shares
 ])
