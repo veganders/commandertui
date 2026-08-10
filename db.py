@@ -161,9 +161,10 @@ def _parse_card(raw: dict) -> Optional[Card]:
 class CardDB:
     cards: dict[str, Card] = field(default_factory=dict)
     rulings: dict[str, list[str]] = field(default_factory=dict)
-    tags: dict[str, list[str]] = field(default_factory=dict)        # expanded (incl. ancestors)
-    tags_norm: dict[str, frozenset[str]] = field(default_factory=dict)  # normalized expanded tags
-    leaf_tags: dict[str, list[str]] = field(default_factory=dict)   # direct tags only
+    tags: dict[str, list[str]] = field(default_factory=dict)             # expanded (incl. ancestors)
+    tags_norm: dict[str, frozenset[str]] = field(default_factory=dict)   # normalized expanded tags
+    leaf_tags: dict[str, list[str]] = field(default_factory=dict)        # direct tags only
+    tag_ancestors: dict[str, frozenset[str]] = field(default_factory=dict)  # tag label → ancestor labels
 
     def search(
         self,
@@ -576,6 +577,13 @@ def load_db() -> CardDB:
 
     for oid, labels in tag_sets.items():
         db.tags[oid] = list(labels)
+
+    # tag label → frozenset of ancestor labels (memo already warm, so this is O(n))
+    db.tag_ancestors = {
+        tag["label"]: _all_labels(tag["id"]) - {tag["label"]}
+        for tag in raw_tags
+    }
+
     db.tags_norm = {
         oid: frozenset(_norm_tag(l) for l in labels)
         for oid, labels in db.tags.items()

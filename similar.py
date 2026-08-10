@@ -24,21 +24,40 @@ from widgets import FilterSuggestions, QueryInput
 _FILTER_BEFORE_SCORE: bool = True
 _TOP_N: int = 50
 
-# Leaf tags excluded from similarity scoring because they describe card name or
-# formatting rather than gameplay function. Extend as needed.
+# Individual tags excluded from similarity scoring (not covered by a parent category below).
 _TAG_BLACKLIST: frozenset[str] = frozenset([
-    "alliteration",              # 12.4% — card name happens to have alliterative words
-    "namesake spell",            # 4.7%  — spell named after an existing character
-    "punny name",                #        — card name is a pun
-    "single english word name",  # 3.9%  — card name is a single word
-    "unique type line",          # 6.0%  — has a type line no other card shares
+    "unique type line",  # 6.0% — has a type line no other card shares
+])
+
+# Entire tag categories to exclude. All descendants of these labels are treated as noise.
+# Add new parent labels here to blacklist whole subtrees at once.
+_BLACKLISTED_PARENT_TAGS: frozenset[str] = frozenset([
+    "card names",  # all children describe naming/wordplay, not gameplay
 ])
 
 
-def _is_noise_tag(tag: str) -> bool:
+_noise_cache: Optional[frozenset[str]] = None
+
+
+def _get_noise_tags(db: CardDB) -> frozenset[str]:
+    """Return the cached set of tag labels that descend from any blacklisted parent category.
+
+    Computed once on first call (db is loaded once per session and never mutated).
+    """
+    global _noise_cache
+    if _noise_cache is None:
+        _noise_cache = frozenset(
+            label
+            for label, ancestors in db.tag_ancestors.items()
+            if ancestors & _BLACKLISTED_PARENT_TAGS
+        )
+    return _noise_cache
+
+
+def _is_noise_tag(tag: str, extra: frozenset[str] = frozenset()) -> bool:
     """True for tags that should be excluded from similarity scoring."""
     t = tag.lower()
-    return tag in _TAG_BLACKLIST or "errata" in t or t.startswith("cycle-")
+    return tag in _TAG_BLACKLIST or tag in extra or "errata" in t or t.startswith("cycle-")
 
 
 def find_similar(
@@ -57,7 +76,8 @@ def find_similar(
     If candidate_ids is given, only cards in that set are scored.
     If top_n is None, all matching cards are returned without a cap.
     """
-    target_tags = frozenset(t for t in db.get_leaf_tags(card.oracle_id) if not _is_noise_tag(t))
+    noise = _get_noise_tags(db)
+    target_tags = frozenset(t for t in db.get_leaf_tags(card.oracle_id) if not _is_noise_tag(t, noise))
     if not target_tags:
         return []
 

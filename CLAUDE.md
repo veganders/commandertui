@@ -166,6 +166,8 @@ The expansion is done once at load time via a memoised recursive `_all_labels(ta
 
 `db.tags_norm[oracle_id]` is a pre-built `frozenset[str]` of the same expanded labels with spaces and hyphens stripped and lowercased (via `_norm_tag`). Used by `otag:` evaluation for O(1) normalized lookup — no per-query normalization cost.
 
+`db.tag_ancestors` is a `dict[str, frozenset[str]]` mapping each **tag label** to the frozenset of its ancestor labels (not including itself). Built in `load_db()` after `_all_labels` is fully memoised, so it's O(n). Used by `similar.py` to derive the full set of descendant labels for any blacklisted parent category without scanning every card.
+
 ---
 
 ## Search syntax
@@ -363,12 +365,13 @@ Typed `Screen[str]`; dismisses with the current query string. `DeckbuilderApp` s
 
 ### Tag blacklist
 
-`_TAG_BLACKLIST` and `_is_noise_tag(tag)` exclude tags that describe card name or formatting rather than gameplay:
+`_is_noise_tag(tag, extra)` excludes tags that describe card name or formatting rather than gameplay. Noise comes from two sources:
 
-- Static blacklist: `alliteration`, `namesake spell`, `single english word name`, `unique type line`
-- Dynamic: any tag containing `"errata"`, or starting with `"cycle-"`
+- **`_TAG_BLACKLIST`** — individual tags not covered by a parent category (currently just `"unique type line"`).
+- **`_BLACKLISTED_PARENT_TAGS`** — entire tag subtrees excluded by parent label (currently `"card names"`, which covers all 35+ children: `alliteration`, `punny name`, `anagram`, `rhyming name`, etc.). Add new parent labels here to blacklist whole categories at once.
+- **Dynamic**: any tag containing `"errata"`, or starting with `"cycle-"`.
 
-Extend `_TAG_BLACKLIST` or the dynamic conditions in `_is_noise_tag` as new noise patterns emerge.
+`_get_noise_tags(db)` computes the full set of descendant labels from `_BLACKLISTED_PARENT_TAGS` using `db.tag_ancestors`, caches the result in the module-level `_noise_cache` on first call, and returns the cached frozenset on every subsequent call. `find_similar` calls it once at the top and passes the result to `_is_noise_tag`.
 
 ### Filter bar
 
