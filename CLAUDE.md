@@ -6,6 +6,8 @@
 
 - **Base-class gravity**: when writing or modifying a child class, check whether the new or changed code could live in the base class instead. If two sibling classes share the same method body, event handler, or attribute initialisation, it belongs in the base. Apply this check proactively — don't wait to be asked.
 
+- **Tests go in `tests/`**: any test written to verify behaviour must be added as a pytest test in `tests/` rather than run ad-hoc on the command line and discarded. Run the suite with `python -m pytest tests/` (venv active). Pure-logic tests (parsing, validation, model helpers) load no data and run in ~0.1 s. Tests that need real card data request the `db` session-scoped fixture from `tests/conftest.py` — the database is loaded once per `pytest` invocation and shared across all tests that use it.
+
 ---
 
 ## Partner / background commander logic
@@ -178,6 +180,7 @@ The expansion is done once at load time via a memoised recursive `_all_labels(ta
 | `t:type` | type line word-boundary match (`t:rat` matches Rat but not Pirate) |
 | `o:"text"` | oracle text substring (quotes allow spaces; `\"` escapes a literal quote) |
 | `o:/regex/` | oracle text regex (Python syntax, case-insensitive; `\/` escapes a literal `/`) |
+| `[q1, q2, q3]{N}` | at least N of the comma-separated sub-queries must match; `{N}` defaults to 1 (OR) if omitted. Filters outside the brackets are AND-ed normally. Multiple groups allowed in one query. |
 | `id:wubrg` | color identity is a **subset** of the given colors; `id:c` means colorless (Scryfall-consistent — `C` is filtered out of WUBRG, leaving an empty set that only colorless cards satisfy) |
 | `id=ur` | color identity is **exactly** the given colors; `id=c` means exactly colorless |
 | `c:rg` | card colors include **at least** red and green |

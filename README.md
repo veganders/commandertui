@@ -74,6 +74,7 @@ python app.py
 | `t:creature` | Type line |
 | `o:"draw a card"` | Oracle text |
 | `o:/regex/` | Oracle text regex |
+| `[q1, q2, q3]{2}` | At least 2 of the sub-queries must match; filters outside the brackets apply normally |
 | `id:wubrg` | Color identity is a subset of the given colors |
 | `id=ur` | Color identity is exactly the given colors |
 | `otag:ramp` | Oracle tag |

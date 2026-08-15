@@ -259,7 +259,14 @@ class Not:
     child: "QueryNode"
 
 
-QueryNode = Union[Atom, And, Or, Not]
+@dataclass
+class AtLeastN:
+    """Threshold node: at least `n` of `children` must be True."""
+    children: list  # list[QueryNode]
+    n: int
+
+
+QueryNode = Union[Atom, And, Or, Not, AtLeastN]
 
 _FILTER_CMP_RE = re.compile(r'^(mv|eur|usd|tix|power|toughness|id)([<>]=?|=)(.+)$', re.IGNORECASE)
 _VALUE_CMP_RE = re.compile(r'^([<>]=?|=)(.+)$')
@@ -267,6 +274,72 @@ _CMP_OPS: dict = {
     '=': float.__eq__, '<': float.__lt__, '>': float.__gt__,
     '<=': float.__le__, '>=': float.__ge__,
 }
+
+
+def _skip_delimited(s: str, i: int, delim: str) -> int:
+    """Advance i past a delimited span (quote or regex). i points at the opening delimiter."""
+    i += 1
+    n = len(s)
+    while i < n and s[i] != delim:
+        if s[i] == '\\' and i + 1 < n and s[i + 1] == delim:
+            i += 2  # escaped delimiter — not a closer
+        else:
+            i += 1
+    return i + 1 if i < n else i  # step past closing delimiter if present
+
+
+def _split_threshold_parts(s: str) -> list[str]:
+    """Split a threshold inner string on commas, skipping commas inside
+    nested brackets, quoted strings, and regex literals."""
+    parts: list[str] = []
+    depth = 0
+    start = 0
+    i = 0
+    n = len(s)
+    while i < n:
+        c = s[i]
+        if c == '[':
+            depth += 1; i += 1
+        elif c == ']':
+            depth -= 1; i += 1
+        elif c in ('"', '/') and depth == 0:
+            i = _skip_delimited(s, i, c)
+        elif c == ',' and depth == 0:
+            parts.append(s[start:i])
+            start = i + 1
+            i += 1
+        else:
+            i += 1
+    parts.append(s[start:])
+    return parts
+
+
+def _scan_bracket_token(query: str, i: int, n: int) -> int:
+    """Consume a `[…]{N}` span. `i` points at the opening `[`.
+
+    Returns the position after the closing `}` (or `]` when no `{N}` suffix is
+    present).  Handles nested brackets and delimited spans inside the brackets
+    so that inner `"…"` and `/…/` content does not confuse the depth counter.
+    """
+    i += 1  # skip opening [
+    depth = 1
+    while i < n and depth > 0:
+        if query[i] == '[':
+            depth += 1; i += 1
+        elif query[i] == ']':
+            depth -= 1; i += 1
+        elif query[i] in ('"', '/'):
+            i = _skip_delimited(query, i, query[i])
+        else:
+            i += 1
+    # optionally consume trailing {N}
+    if i < n and query[i] == '{':
+        i += 1
+        while i < n and query[i] != '}':
+            i += 1
+        if i < n:
+            i += 1
+    return i
 
 
 def _tokenize(query: str) -> list[str]:
@@ -280,26 +353,18 @@ def _tokenize(query: str) -> list[str]:
             tokens.append(query[i])
             i += 1
             continue
+        if query[i] == '[' or (query[i] == '-' and i + 1 < n and query[i + 1] == '['):
+            # consume (optional leading -)[sub-query, sub-query, ...]{N} as a single token
+            start = i
+            if query[i] == '-':
+                i += 1  # skip the negation prefix
+            i = _scan_bracket_token(query, i, n)
+            tokens.append(query[start:i])
+            continue
         start = i
         while i < n and not query[i].isspace() and query[i] not in '()':
-            if query[i] == '"':
-                i += 1
-                while i < n and query[i] != '"':
-                    if query[i] == '\\' and i + 1 < n and query[i + 1] == '"':
-                        i += 2  # \" — not a closing delimiter
-                    else:
-                        i += 1
-                if i < n:
-                    i += 1  # closing quote
-            elif query[i] == '/':
-                i += 1
-                while i < n and query[i] != '/':
-                    if query[i] == '\\' and i + 1 < n and query[i + 1] == '/':
-                        i += 2  # \/ — not a closing delimiter
-                    else:
-                        i += 1
-                if i < n:
-                    i += 1  # closing /
+            if query[i] in ('"', '/'):
+                i = _skip_delimited(query, i, query[i])
             else:
                 i += 1
         tok = query[start:i]
@@ -308,22 +373,52 @@ def _tokenize(query: str) -> list[str]:
     return tokens
 
 
+def _parse_threshold(token: str) -> AtLeastN:
+    """Parse a `[q1, q2, …]{N}` token into an `AtLeastN` node."""
+    try:
+        inner_end = token.rindex(']')
+    except ValueError:
+        inner_end = len(token)  # unclosed bracket — treat rest as inner content
+    inner = token[1:inner_end]
+    suffix = token[inner_end + 1:]  # e.g. "{2}" or ""
+    if suffix.startswith('{') and suffix.endswith('}'):
+        try:
+            n = int(suffix[1:-1])
+        except ValueError:
+            n = 1
+    else:
+        n = 1  # no {N} — OR semantics
+    parts = _split_threshold_parts(inner)
+    children = [parse_query(p.strip()) for p in parts if p.strip()]
+    return AtLeastN(children=children, n=n)
+
+
+def _parse_colon_atom(key: str, rest: str) -> Atom:
+    """Parse the value side of a `key:value` token into an `Atom`.
+
+    Handles three forms: quoted (`"…"` with `\"` escape), regex (`/…/` with
+    `\\/` escape), and plain.  Regex validity is checked later in
+    `_validate_atom`; this function is non-raising.
+    """
+    if len(rest) >= 2 and rest[0] == '"' and rest[-1] == '"':
+        rest = rest[1:-1].replace('\\"', '"')
+    elif rest.startswith('/') and rest.endswith('/') and len(rest) >= 2:
+        rest = '/' + rest[1:-1].replace('\\/', '/') + '/'
+    return Atom(key=key.lower(), value=rest)
+
+
 def _parse_filter(token: str) -> QueryNode:
     if token.startswith('-') and len(token) > 1:
         return Not(_parse_filter(token[1:]))
+    if token.startswith('['):
+        return _parse_threshold(token)
     m = _FILTER_CMP_RE.match(token)
     if m:
         key, op, val = m.groups()
         return Atom(key=key.lower(), value=f'{op}{val}')
     if ':' in token:
         key, _, rest = token.partition(':')
-        if len(rest) >= 2 and rest[0] == '"' and rest[-1] == '"':
-            rest = rest[1:-1].replace('\\"', '"')          # unescape \" inside quoted strings
-        elif rest.startswith('/') and rest.endswith('/') and len(rest) >= 2:
-            inner = rest[1:-1].replace('\\/', '/')         # unescape \/ → / inside regex
-            rest = f'/{inner}/'                            # store with /…/ marker
-            # Validity checked in _validate_atom; parse_query() stays non-raising.
-        return Atom(key=key.lower(), value=rest)
+        return _parse_colon_atom(key, rest)
     return Atom(key='name', value=token)
 
 
@@ -331,18 +426,23 @@ def parse_query(query: str) -> QueryNode:
     """Parse a Scryfall-like query string into a boolean AST.
 
     Supported syntax:
-      bare words         — name substring (implicit AND)
-      t:type             — type line substring
-      o:"draw a card"    — oracle text substring (quotes allow spaces)
-      id:wubrg           — color identity is subset of given colors
-      c:rg               — card colors include at least the given colors
-      otag:ramp          — oracle tag exact match
-      r:rare             — exact rarity
-      mv:3 / mv>=2       — mana value comparison
-      eur<=1 / usd>=5    — price comparison (cheapest printing)
-      -t:creature        — negate any filter
-      AND / OR           — explicit boolean operators
-      ( ... )            — grouping; AND has higher precedence than OR
+      bare words              — name substring (implicit AND)
+      t:type                  — type line substring
+      o:"draw a card"         — oracle text substring (quotes allow spaces)
+      id:wubrg                — color identity is subset of given colors
+      c:rg                    — card colors include at least the given colors
+      otag:ramp               — oracle tag exact match
+      r:rare                  — exact rarity
+      mv:3 / mv>=2            — mana value comparison
+      eur<=1 / usd>=5         — price comparison (cheapest printing)
+      -t:creature             — negate any filter
+      AND / OR                — explicit boolean operators
+      ( ... )                 — grouping; AND has higher precedence than OR
+      [q1, q2, q3]{N}         — at least N of the comma-separated sub-queries
+                                must match; {N} defaults to 1 if omitted.
+                                Filters outside the brackets are AND-ed normally,
+                                so [otag:ramp, otag:draw]{2} eur<1 finds cheap
+                                cards that do both.
     """
     tokens = _tokenize(query)
     pos = [0]
@@ -477,6 +577,9 @@ def _eval_node(node: QueryNode, card: Card, tags: list[str], tags_norm: frozense
         return any(_eval_node(c, card, tags, tags_norm) for c in node.children)
     if isinstance(node, Not):
         return not _eval_node(node.child, card, tags, tags_norm)
+    if isinstance(node, AtLeastN):
+        count = sum(1 for c in node.children if _eval_node(c, card, tags, tags_norm))
+        return count >= node.n
 
 
 def _validate_atom(atom: Atom) -> bool:
@@ -498,13 +601,18 @@ def _validate_atom(atom: Atom) -> bool:
 
 
 def validate_query(node: QueryNode) -> bool:
-    """Returns False if any numeric filter atom has an unparseable value."""
+    """Returns False if any numeric filter atom has an unparseable value,
+    or if an AtLeastN node has an out-of-range threshold."""
     if isinstance(node, Atom):
         return _validate_atom(node)
     if isinstance(node, (And, Or)):
         return all(validate_query(c) for c in node.children)
     if isinstance(node, Not):
         return validate_query(node.child)
+    if isinstance(node, AtLeastN):
+        if not node.children or not (1 <= node.n <= len(node.children)):
+            return False
+        return all(validate_query(c) for c in node.children)
     return True
 
 

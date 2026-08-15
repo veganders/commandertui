@@ -14,3 +14,4 @@ rich==15.0.0
 textual==8.2.7
 typing_extensions==4.15.0
 uc-micro-py==2.0.0
+pytest>=9
