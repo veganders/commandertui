@@ -60,6 +60,7 @@ python app.py
 | `G` | Cycle grouping (Named / Type / MV) |
 | `S` | Filter deck |
 | `ctrl+s` | Save deck |
+| `ctrl+r` | Save as (copy to new file) |
 | `ctrl+o` | Open deck |
 | `ctrl+e` | Export deck |
 | `ctrl+n` | New deck |

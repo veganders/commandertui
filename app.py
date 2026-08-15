@@ -21,7 +21,7 @@ from color_scout import ColorScoutScreen
 from search import MODE_COMMANDER, MODE_GROUP, MODE_PARTNER, SearchScreen
 from similar import SimilarCardsScreen
 from settings import Settings
-from grouping import CardGrouper, MVGrouper, NamedGrouper, TypeGrouper
+from grouping import CardGrouper, MVGrouper, NamedGrouper, TagGrouper, TypeGrouper
 from sorting import CardSorter, MVSorter, NameSorter, PriceSorter
 from widgets import CardDetail, CardGroupEditorScreen, DeckNameModal, ExportModal, FilterSuggestions, GroupNameModal, OpenDeckScreen, QueryInput, TopBar, WrappingFooter, build_filter_candidates
 
@@ -61,6 +61,7 @@ class MainScreen(Screen):
         Binding("ctrl+e", "export_deck", "Export"),
         Binding("ctrl+n", "new_deck", "New"),
         Binding("ctrl+s", "save_deck", "Save"),
+        Binding("ctrl+r", "save_deck_as", "Save as"),
         Binding("ctrl+o", "open_deck", "Open"),
         Binding("+", "increment_card", "+1"),
         Binding("-", "decrement_card", "-1"),
@@ -89,7 +90,7 @@ class MainScreen(Screen):
         return sorters[self._sort_idx % len(sorters)]
 
     def _groupers(self) -> list[CardGrouper]:
-        return [NamedGrouper(), TypeGrouper(), MVGrouper()]
+        return [NamedGrouper(), TypeGrouper(), MVGrouper(), TagGrouper(self._db)]
 
     def _current_grouper(self) -> CardGrouper:
         groupers = self._groupers()
@@ -405,6 +406,18 @@ class MainScreen(Screen):
                 self.query_one(TopBar).refresh_display()
                 self.notify(f"Saved: {path.name}")
             self.app.push_screen(DeckNameModal(), callback=on_name)
+
+    def action_save_deck_as(self) -> None:
+        def on_name(name: str | None) -> None:
+            if not name:
+                return
+            self._deck.name = name
+            self._deck.save_path = None          # clear so save_deck generates a fresh path
+            path = save_deck(self._deck)
+            self._deck.save_path = path
+            self.query_one(TopBar).refresh_display()
+            self.notify(f"Saved: {path.name}")
+        self.app.push_screen(DeckNameModal(current_name=self._deck.name), callback=on_name)
 
     def action_open_deck(self) -> None:
         paths = list_decks()

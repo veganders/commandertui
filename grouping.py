@@ -5,8 +5,10 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Callable, Optional
 
+from db import CardDB
 from models import MAYBEBOARD, CardEntry, Deck, Group
 from sorting import CardSorter
+from tag_filter import get_noise_tags, is_noise_tag
 
 
 class CardGrouper(ABC):
@@ -55,7 +57,8 @@ class NamedGrouper(CardGrouper):
 
     def groups(self, deck, passes, sorter, has_filter=False):
         result = []
-        for group in deck.groups:
+        sorted_groups = sorted(deck.groups, key=lambda g: (g.name == MAYBEBOARD, g.name.lower()))
+        for group in sorted_groups:
             raw = deck.entries_for_group(group.name)
             entries = sorted(
                 [e for e in raw if passes(e) and (group.name == MAYBEBOARD or not e.is_maybe())],
@@ -134,6 +137,46 @@ class MVGrouper(CardGrouper):
 
         if land_bucket:
             result.append(("Land", sorted(land_bucket, key=sorter.key), None))
+
+        result.extend(_maybeboard_rows(deck, passes, sorter))
+        return result
+
+
+class TagGrouper(CardGrouper):
+    """One group per leaf oracle tag, sorted alphabetically. Maybeboard appended last.
+
+    Cards with multiple leaf tags appear in all matching groups.  Cards with no
+    leaf tags are collected into an 'Untagged' group.
+    """
+
+    def __init__(self, db: CardDB) -> None:
+        self._db = db
+
+    @property
+    def label(self) -> str: return "Tag"
+
+    def groups(self, deck, passes, sorter, has_filter=False):
+        noise = get_noise_tags(self._db)
+        tag_buckets: dict[str, list[CardEntry]] = {}
+        untagged: list[CardEntry] = []
+
+        for entry in deck.entries.values():
+            if entry.is_maybe() or not passes(entry):
+                continue
+            tags = [t for t in self._db.get_leaf_tags(entry.card.oracle_id) if not is_noise_tag(t, noise)]
+            if tags:
+                for tag in tags:
+                    tag_buckets.setdefault(tag, []).append(entry)
+            else:
+                untagged.append(entry)
+
+        result = []
+        for tag in sorted(tag_buckets):
+            entries = sorted(tag_buckets[tag], key=sorter.key)
+            result.append((tag.capitalize(), entries, None))
+
+        if untagged:
+            result.append(("Untagged", sorted(untagged, key=sorter.key), None))
 
         result.extend(_maybeboard_rows(deck, passes, sorter))
         return result

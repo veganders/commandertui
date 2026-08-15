@@ -14,6 +14,7 @@ from db import Card, CardDB, parse_query
 from models import Deck
 from search import CardListScreen
 from settings import Settings
+from tag_filter import get_noise_tags, is_noise_tag
 from widgets import FilterSuggestions, QueryInput
 
 # Flip to compare the two filtering strategies:
@@ -23,41 +24,6 @@ from widgets import FilterSuggestions, QueryInput
 #           (top-50 are the best overall matches, minus cards that fail the query)
 _FILTER_BEFORE_SCORE: bool = True
 _TOP_N: int = 50
-
-# Individual tags excluded from similarity scoring (not covered by a parent category below).
-_TAG_BLACKLIST: frozenset[str] = frozenset([
-    "unique type line",  # 6.0% — has a type line no other card shares
-])
-
-# Entire tag categories to exclude. All descendants of these labels are treated as noise.
-# Add new parent labels here to blacklist whole subtrees at once.
-_BLACKLISTED_PARENT_TAGS: frozenset[str] = frozenset([
-    "card names",  # all children describe naming/wordplay, not gameplay
-])
-
-
-_noise_cache: Optional[frozenset[str]] = None
-
-
-def _get_noise_tags(db: CardDB) -> frozenset[str]:
-    """Return the cached set of tag labels that descend from any blacklisted parent category.
-
-    Computed once on first call (db is loaded once per session and never mutated).
-    """
-    global _noise_cache
-    if _noise_cache is None:
-        _noise_cache = frozenset(
-            label
-            for label, ancestors in db.tag_ancestors.items()
-            if ancestors & _BLACKLISTED_PARENT_TAGS
-        )
-    return _noise_cache
-
-
-def _is_noise_tag(tag: str, extra: frozenset[str] = frozenset()) -> bool:
-    """True for tags that should be excluded from similarity scoring."""
-    t = tag.lower()
-    return tag in _TAG_BLACKLIST or tag in extra or "errata" in t or t.startswith("cycle-")
 
 
 def find_similar(
@@ -76,8 +42,8 @@ def find_similar(
     If candidate_ids is given, only cards in that set are scored.
     If top_n is None, all matching cards are returned without a cap.
     """
-    noise = _get_noise_tags(db)
-    target_tags = frozenset(t for t in db.get_leaf_tags(card.oracle_id) if not _is_noise_tag(t, noise))
+    noise = get_noise_tags(db)
+    target_tags = frozenset(t for t in db.get_leaf_tags(card.oracle_id) if not is_noise_tag(t, noise))
     if not target_tags:
         return []
 

@@ -268,6 +268,7 @@ Save format:
 | `ctrl+e` | Export deck (opens exporter picker) |
 | `ctrl+n` | New deck — resets to initial state (five permanent groups, no cards) |
 | `ctrl+s` | Save deck (prompts for name on first save, then saves in place) |
+| `ctrl+r` | Save as — always prompts for a name (pre-filled if already saved); writes to a new file |
 | `ctrl+o` | Open saved deck (shows list sorted by most-recently-modified) |
 | `+` | Increment copy count for the focused card (only if `card.allows_multiple()`) |
 | `-` | Decrement copy count for the focused card |
@@ -357,7 +358,7 @@ Typed `Screen[str]`; dismisses with the current query string. `DeckbuilderApp` s
 ### Scoring
 
 `find_similar(card, db, color_identity, top_n, candidate_ids)`:
-- Builds a `target_tags` frozenset from the source card's **leaf** tags (directly assigned, not ancestors), excluding noise tags via `_is_noise_tag`.
+- Builds a `target_tags` frozenset from the source card's **leaf** tags (directly assigned, not ancestors), excluding noise tags via `is_noise_tag` from `tag_filter.py`.
 - Scores every candidate as `len(target_tags & candidate_leaf_tags)`. Cards with score 0 are excluded.
 - Returns up to `_TOP_N = 50` results sorted by descending score. Pass `top_n=None` to get all matches.
 - If `color_identity` is given, only cards whose `color_identity ⊆ identity` are scored (same semantics as `id:` filter).
@@ -365,13 +366,15 @@ Typed `Screen[str]`; dismisses with the current query string. `DeckbuilderApp` s
 
 ### Tag blacklist
 
-`_is_noise_tag(tag, extra)` excludes tags that describe card name or formatting rather than gameplay. Noise comes from two sources:
+Noise-tag filtering is shared with the Tag grouping mode and lives in **`tag_filter.py`**. Both `similar.py` and `grouping.py` import from it; neither depends on the other.
 
-- **`_TAG_BLACKLIST`** — individual tags not covered by a parent category (currently just `"unique type line"`).
-- **`_BLACKLISTED_PARENT_TAGS`** — entire tag subtrees excluded by parent label (currently `"card names"`, which covers all 35+ children: `alliteration`, `punny name`, `anagram`, `rhyming name`, etc.). Add new parent labels here to blacklist whole categories at once.
+`is_noise_tag(tag, extra)` excludes tags that describe card name or formatting rather than gameplay. Noise comes from two sources:
+
+- **`TAG_BLACKLIST`** — individual tags not covered by a parent category (currently `"face-commander"` and `"unique type line"`).
+- **`BLACKLISTED_PARENT_TAGS`** — entire tag subtrees excluded by parent label (currently `"card names"`, which covers all 35+ children: `alliteration`, `punny name`, `anagram`, `rhyming name`, etc.). Add new parent labels here to blacklist whole categories at once.
 - **Dynamic**: any tag containing `"errata"`, or starting with `"cycle-"`.
 
-`_get_noise_tags(db)` computes the full set of descendant labels from `_BLACKLISTED_PARENT_TAGS` using `db.tag_ancestors`, caches the result in the module-level `_noise_cache` on first call, and returns the cached frozenset on every subsequent call. `find_similar` calls it once at the top and passes the result to `_is_noise_tag`.
+`get_noise_tags(db)` computes the full set of descendant labels from `BLACKLISTED_PARENT_TAGS` using `db.tag_ancestors`, caches the result in a module-level `_noise_cache` on first call, and returns the cached frozenset on every subsequent call. Callers compute it once and pass the result to `is_noise_tag`.
 
 ### Filter bar
 
@@ -427,17 +430,18 @@ This matters because Textual fires `Select.Changed` asynchronously: by the time 
 
 ## Grouping (`grouping.py`)
 
-Cards in the main deck tree can be grouped three ways, cycled with `G`:
+Cards in the main deck tree can be grouped four ways, cycled with `G`:
 
-- **Named** (`NamedGrouper`) — user-defined groups in deck order, Uncategorized at the bottom. Group nodes carry a `Group` data object so the `d` key works normally.
+- **Named** (`NamedGrouper`) — user-defined groups sorted **alphabetically by name**, Maybeboard always last, Uncategorized at the bottom. Group nodes carry a `Group` data object so the `d` key works normally.
 - **Type** (`TypeGrouper`) — one group per primary card type in the order: Creature, Instant, Sorcery, Artifact, Enchantment, Planeswalker, Battle, Land, Other. Type is determined by `card.has_type()` against each label in that priority order (first match wins). Maybeboard appended last.
 - **MV** (`MVGrouper`) — one group per exact mana value present in the deck (no cap — a deck with a 12-mana card gets an MV 12 bucket); pure lands separated into a Land group. Maybeboard appended last.
+- **Tag** (`TagGrouper(db)`) — one group per leaf oracle tag, sorted alphabetically. Cards with multiple leaf tags appear in all matching groups. Cards with no leaf tags go to an 'Untagged' group. Maybeboard appended last. Requires `db` in its constructor.
 
 All groups — including the Commander / Partner section — use `group_label()` in `_rebuild_tree`, which appends a price subtotal and card count when pricing data is available (e.g. `Ramp  (8)  €12.40`).
 
-Synthetic group nodes (Type and MV modes) have `data=None`, so `d` on a group node is a no-op in those modes. `d`, `e`, `m` on card leaf nodes work identically in all modes.
+Synthetic group nodes (Type, MV, and Tag modes) have `data=None`, so `d` on a group node is a no-op in those modes. `d`, `e`, `m` on card leaf nodes work identically in all modes.
 
-`DeckbuilderApp._groupers()` returns `[NamedGrouper(), TypeGrouper(), MVGrouper()]`. Add new grouping strategies by appending to `_groupers()`.
+`DeckbuilderApp._groupers()` returns `[NamedGrouper(), TypeGrouper(), MVGrouper(), TagGrouper(self._db)]`. Add new grouping strategies by appending to `_groupers()`.
 
 `label` is an abstract property on both `CardGrouper` and `CardSorter` — concrete subclasses must implement it as a `@property`.
 
