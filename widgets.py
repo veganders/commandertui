@@ -20,6 +20,7 @@ from textual.widgets._footer import FooterKey
 
 from db import Card, CardDB, _norm_tag, parse_query, validate_query
 from exporter import DeckExporter
+from grouping import GroupInfo
 from models import Deck, Group
 from settings import Settings
 
@@ -973,6 +974,12 @@ class CardDetail(VerticalScroll):
         else:
             label_w.display = False
             select_w.display = False
+
+    def show_group_info(self, info: GroupInfo) -> None:
+        """Show group-specific detail (tag chain, type info, etc.) in the panel."""
+        self.query_one("#cd-printing-label").display = False
+        self.query_one("#cd-printing-select").display = False
+        self.query_one("#cd-text", Static).update(info.to_text())
 
     def _format(self, card: Card, db: CardDB) -> Text:
         t = Text()

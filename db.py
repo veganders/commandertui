@@ -164,7 +164,9 @@ class CardDB:
     tags: dict[str, list[str]] = field(default_factory=dict)             # expanded (incl. ancestors)
     tags_norm: dict[str, frozenset[str]] = field(default_factory=dict)   # normalized expanded tags
     leaf_tags: dict[str, list[str]] = field(default_factory=dict)        # direct tags only
-    tag_ancestors: dict[str, frozenset[str]] = field(default_factory=dict)  # tag label → ancestor labels
+    tag_ancestors: dict[str, frozenset[str]] = field(default_factory=dict)   # tag label → ancestor labels
+    tag_descriptions: dict[str, str] = field(default_factory=dict)          # tag label → description (may be "")
+    tag_parents: dict[str, list[str]] = field(default_factory=dict)         # tag label → direct parent labels
 
     def search(
         self,
@@ -690,6 +692,16 @@ def load_db() -> CardDB:
     db.tag_ancestors = {
         tag["label"]: _all_labels(tag["id"]) - {tag["label"]}
         for tag in raw_tags
+    }
+
+    db.tag_descriptions = {t["label"]: t.get("description", "") for t in raw_tags}
+    db.tag_parents = {
+        t["label"]: [
+            tag_by_id[pid]["label"]
+            for pid in t.get("parent_ids", [])
+            if pid in tag_by_id
+        ]
+        for t in raw_tags
     }
 
     db.tags_norm = {

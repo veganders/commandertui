@@ -21,7 +21,7 @@ from color_scout import ColorScoutScreen
 from search import MODE_COMMANDER, MODE_GROUP, MODE_PARTNER, SearchScreen
 from similar import SimilarCardsScreen
 from settings import Settings
-from grouping import CardGrouper, MVGrouper, NamedGrouper, TagGrouper, TypeGrouper
+from grouping import CardGrouper, GroupInfo, MVGrouper, NamedGrouper, TagGrouper, TypeGrouper
 from sorting import CardSorter, MVSorter, NameSorter, PriceSorter
 from widgets import CardDetail, CardGroupEditorScreen, DeckNameModal, ExportModal, FilterSuggestions, GroupNameModal, OpenDeckScreen, QueryInput, TopBar, WrappingFooter, build_filter_candidates
 
@@ -211,9 +211,17 @@ class MainScreen(Screen):
 
     def _sync_detail_to_cursor(self) -> None:
         node = self.query_one("#groups", Tree).cursor_node
-        card = node.data if node and isinstance(node.data, Card) else None
-        self._current_card = card
-        self.query_one(CardDetail).show_card(card, self._db, self._deck, self._settings)
+        data = node.data if node else None
+        detail = self.query_one(CardDetail)
+        if isinstance(data, Card):
+            self._current_card = data
+            detail.show_card(data, self._db, self._deck, self._settings)
+        elif isinstance(data, GroupInfo):
+            self._current_card = None
+            detail.show_group_info(data)
+        else:
+            self._current_card = None
+            detail.show_card(None, self._db, self._deck, self._settings)
 
     def _group_for_cursor(self) -> Optional[Group]:
         node = self.query_one("#groups", Tree).cursor_node
@@ -229,11 +237,23 @@ class MainScreen(Screen):
     # ── event handlers ─────────────────────────────────────────────────────────
 
     def on_tree_node_highlighted(self, event: Tree.NodeHighlighted) -> None:
-        card = event.node.data if isinstance(event.node.data, Card) else None
-        if card is not self._current_card:
-            self._current_card = card
-            self.refresh_bindings()
-        self.query_one(CardDetail).show_card(card, self._db, self._deck, self._settings)
+        data = event.node.data
+        detail = self.query_one(CardDetail)
+        if isinstance(data, Card):
+            if data is not self._current_card:
+                self._current_card = data
+                self.refresh_bindings()
+            detail.show_card(data, self._db, self._deck, self._settings)
+        elif isinstance(data, GroupInfo):
+            if self._current_card is not None:
+                self._current_card = None
+                self.refresh_bindings()
+            detail.show_group_info(data)
+        else:
+            if self._current_card is not None:
+                self._current_card = None
+                self.refresh_bindings()
+            detail.show_card(None, self._db, self._deck, self._settings)
 
     def on_top_bar_currency_changed(self, msg: TopBar.CurrencyChanged) -> None:
         self._settings.currency = msg.currency

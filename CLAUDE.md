@@ -6,6 +6,8 @@
 
 - **Base-class gravity**: when writing or modifying a child class, check whether the new or changed code could live in the base class instead. If two sibling classes share the same method body, event handler, or attribute initialisation, it belongs in the base. Apply this check proactively — don't wait to be asked.
 
+- **No magic numbers**: every numeric literal that encodes a policy or threshold must be assigned a named constant at module level. The only exception is values so universally understood they need no name (0, 1, -1, and basic geometric constants like 2 for halving). A width, a count cap, a timeout, a score threshold — all get names.
+
 - **Tests go in `tests/`**: any test written to verify behaviour must be added as a pytest test in `tests/` rather than run ad-hoc on the command line and discarded. Run the suite with `python -m pytest tests/` (venv active). Pure-logic tests (parsing, validation, model helpers) load no data and run in ~0.1 s. Tests that need real card data request the `db` session-scoped fixture from `tests/conftest.py` — the database is loaded once per `pytest` invocation and shared across all tests that use it.
 
 ---
