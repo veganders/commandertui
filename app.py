@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import urllib.parse
 from typing import Callable, Optional
 
+from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
@@ -12,7 +14,9 @@ from textual.widgets import Input, ListView, Tree
 
 from rich.text import Text
 from archidekt import ArchidektExporter
+from archidekt_import import ArchidektImporter
 from clipboard import ClipboardExporter
+from importer import DeckImporter
 from db import Card, CardDB, load_db, parse_query
 from deck_io import list_decks, load_deck, save_deck
 from models import MAYBEBOARD, CardEntry, CardRole, Deck, Group
@@ -23,9 +27,10 @@ from similar import SimilarCardsScreen
 from settings import Settings
 from grouping import CardGrouper, GroupInfo, MVGrouper, NamedGrouper, TagGrouper, TypeGrouper
 from sorting import CardSorter, MVSorter, NameSorter, PriceSorter
-from widgets import CardDetail, CardGroupEditorScreen, DeckNameModal, ExportModal, FilterSuggestions, GroupNameModal, OpenDeckScreen, QueryInput, TopBar, WrappingFooter, build_filter_candidates
+from widgets import CardDetail, CardGroupEditorScreen, DeckNameModal, ExportModal, FilterSuggestions, GroupNameModal, ImportUrlModal, OpenDeckScreen, QueryInput, TopBar, WrappingFooter, build_filter_candidates
 
 _EXPORTERS = [ArchidektExporter(), ClipboardExporter()]
+_IMPORTERS: list[DeckImporter] = [ArchidektImporter()]
 
 
 class MainScreen(Screen):
@@ -63,6 +68,7 @@ class MainScreen(Screen):
         Binding("ctrl+s", "save_deck", "Save"),
         Binding("ctrl+r", "save_deck_as", "Save as"),
         Binding("ctrl+o", "open_deck", "Open"),
+        Binding("ctrl+u", "import_deck", "Import"),
         Binding("+", "increment_card", "+1"),
         Binding("-", "decrement_card", "-1"),
         Binding("x", "color_scout", "Color Scout"),
@@ -455,6 +461,34 @@ class MainScreen(Screen):
             self.notify(f"Opened: {self._deck.name or path.stem}")
 
         self.app.push_screen(OpenDeckScreen(paths), callback=on_path)
+
+    def action_import_deck(self) -> None:
+        def on_url(url: Optional[str]) -> None:
+            if url:
+                self._run_import(url)
+        self.app.push_screen(ImportUrlModal(), callback=on_url)
+
+    @work(exit_on_error=False)
+    async def _run_import(self, url: str) -> None:
+        importer = next((i for i in _IMPORTERS if i.can_handle(url)), None)
+        if importer is None:
+            source = urllib.parse.urlparse(url).netloc or url
+            self.notify(f"I don't know how to import cards from {source}", severity="error")
+            return
+        try:
+            deck, skipped = await importer.import_deck(url, self._db)
+            self._deck.__dict__.update(deck.__dict__)
+            _ensure_permanent_groups(self._deck)
+            self._rebuild_tree()
+            self.query_one(TopBar).refresh_display()
+            msg = f"Imported: {self._deck.name}"
+            if skipped:
+                msg += f" ({len(skipped)} card(s) not found in DB)"
+            self.notify(msg)
+        except ValueError as e:
+            self.notify(str(e), severity="error")
+        except Exception as e:
+            self.notify(f"Import failed: {e}", severity="error")
 
     def action_find_similar(self) -> None:
         node = self.query_one("#groups", Tree).cursor_node

@@ -580,6 +580,43 @@ class DeckNameModal(ModalScreen[Optional[str]]):
         self.dismiss(None)
 
 
+# ── ImportUrlModal ─────────────────────────────────────────────────────────────
+
+class ImportUrlModal(ModalScreen[Optional[str]]):
+    """Modal that asks the user for a deck URL to import."""
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    CSS = """
+    ImportUrlModal {
+        align: center middle;
+        background: $background 60%;
+    }
+    #im-box {
+        width: 72;
+        height: auto;
+        background: $surface;
+        border: solid $primary;
+        padding: 1 2;
+    }
+    """
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="im-box"):
+            yield Label("Deck URL:")
+            yield Input(id="im-input", placeholder="https://archidekt.com/decks/12345/deck-name")
+
+    def on_mount(self) -> None:
+        self.query_one("#im-input", Input).focus()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        val = event.value.strip()
+        self.dismiss(val if val else None)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 # ── OpenDeckScreen ─────────────────────────────────────────────────────────────
 
 class OpenDeckScreen(ModalScreen[Optional[Path]]):
