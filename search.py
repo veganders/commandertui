@@ -288,7 +288,7 @@ class SearchScreen(CardListScreen):
     ]
 
     CSS = CardListScreen.CSS + """
-    SearchScreen { layout: vertical; background: $background; }
+    SearchScreen { layout: vertical; background: $background; layers: default above; }
     #srch-bar {
         height: 3;
         padding: 0 1;

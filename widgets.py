@@ -363,7 +363,8 @@ class FilterSuggestions:
         sugg.clear()
         for val in matches:
             sugg.append(ListItem(Label(val)))
-        sugg.styles.margin = (0, 0, 0, min(token_start + 2, 24))
+        inp = self._inp()
+        sugg.styles.offset = (inp.region.x + min(token_start + 2, 24), inp.region.y + inp.region.height)
         sugg.display = True
         sugg.call_after_refresh(lambda: setattr(sugg, 'index', 0))
 

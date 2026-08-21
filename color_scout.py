@@ -68,7 +68,7 @@ class ColorScoutScreen(Screen[None]):
     ]
 
     CSS = """
-    ColorScoutScreen { layout: vertical; background: $background; }
+    ColorScoutScreen { layout: vertical; background: $background; layers: default above; }
     #cs-bar {
         height: 3;
         padding: 0 1;

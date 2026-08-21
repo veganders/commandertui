@@ -35,6 +35,7 @@ _IMPORTERS: list[DeckImporter] = [ArchidektImporter()]
 
 class MainScreen(Screen):
     CSS = """
+    MainScreen { layers: default above; }
     TopBar {
         height: 5;
         padding: 0 2;
@@ -107,9 +108,9 @@ class MainScreen(Screen):
         with Horizontal(id="bottom"):
             with Vertical(id="groups-panel"):
                 yield QueryInput(placeholder="Filter deck…", id="deck-search", delay=0.4, select_on_focus=False)
-                yield ListView(id="deck-suggest", classes="filter-suggest")
                 yield Tree("Groups", id="groups")
             yield CardDetail()
+        yield ListView(id="deck-suggest", classes="filter-suggest")
         yield WrappingFooter()
 
     def on_mount(self) -> None:
@@ -567,6 +568,8 @@ class DeckbuilderApp(App):
         width: 44;
         background: $surface;
         border: solid $primary;
+        position: absolute;
+        layer: above;
     }
     QueryInput.query-error { background: $error 25%; }
     QueryInput.query-error:focus { background: $error 35%; }
