@@ -57,15 +57,62 @@ class Group:
     permanent: bool = False
 
 
+class GroupList:
+    """Sorted container for Group objects.
+
+    Groups are kept in alphabetical order by name, with Maybeboard always last.
+    Use ``append`` to add a group and ``remove`` to delete one — both maintain
+    the invariant.  Supports iteration, ``len``, and index access.
+    """
+
+    def __init__(self, items: list[Group] | None = None) -> None:
+        self._items: list[Group] = sorted(items or [], key=self._key)
+
+    @staticmethod
+    def _key(g: Group) -> tuple:
+        return (g.name == MAYBEBOARD, g.name.lower())
+
+    def append(self, group: Group) -> None:
+        """Insert *group* in sorted position."""
+        key = self._key(group)
+        lo, hi = 0, len(self._items)
+        while lo < hi:
+            mid = (lo + hi) // 2
+            if self._key(self._items[mid]) < key:
+                lo = mid + 1
+            else:
+                hi = mid
+        self._items.insert(lo, group)
+
+    def remove(self, group: Group) -> None:
+        self._items.remove(group)
+
+    def __iter__(self):
+        return iter(self._items)
+
+    def __len__(self) -> int:
+        return len(self._items)
+
+    def __getitem__(self, idx: int) -> Group:
+        return self._items[idx]
+
+    def __repr__(self) -> str:
+        return f"GroupList({self._items!r})"
+
+
 @dataclass
 class Deck:
     commander: Optional[CardEntry] = None
     partner: Optional[CardEntry] = None
-    groups: list[Group] = field(default_factory=list)
+    groups: GroupList = field(default_factory=GroupList)
     entries: dict[str, CardEntry] = field(default_factory=dict)  # oracle_id → CardEntry
     selected_printings: dict[str, int] = field(default_factory=dict)  # cache for non-deck cards
     name: Optional[str] = None
     save_path: Optional[Path] = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.groups, GroupList):
+            self.groups = GroupList(self.groups)
 
     def get_entry_for_card(self, oracle_id: str) -> Optional[CardEntry]:
         """Find any entry (commander, partner, or main) by oracle_id."""

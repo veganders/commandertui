@@ -10,7 +10,7 @@ import httpx
 from db import Card, CardDB
 from deck_io import _find_printing_idx
 from importer import DeckImporter
-from models import CardEntry, CardRole, Deck, Group, MAYBEBOARD
+from models import CardEntry, CardRole, Deck, Group, GroupList, MAYBEBOARD
 
 _API_URL = "https://archidekt.com/api/decks/{}/"
 _DECK_ID_RE = re.compile(r'(?:archidekt\.com/decks/)?(\d+)')
@@ -154,7 +154,7 @@ def _parse_archidekt_deck(data: dict, db: CardDB) -> tuple[Deck, list[str]]:
         deck.partner = commander_entries[1]
 
     # Build group list (insertion order = first appearance in card list).
-    deck.groups = [Group(name=n, permanent=False) for n in seen_group_names]
+    deck.groups = GroupList([Group(name=n, permanent=False) for n in seen_group_names])
 
     return deck, skipped
 

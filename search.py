@@ -271,7 +271,8 @@ class CardListScreen(Screen):
             return
         card = self._current_card
         entry = self._deck.get_entry(card.oracle_id)
-        if entry is None:
+        is_new = entry is None
+        if is_new:
             self._deck.add(card)
             entry = self._deck.get_entry(card.oracle_id)
         if entry is not None:
@@ -279,6 +280,9 @@ class CardListScreen(Screen):
                 entry.leave_group(MAYBEBOARD)
             else:
                 entry.join_group(MAYBEBOARD)
+                if is_new:
+                    for g in route_groups(card, self._deck, self._db):
+                        entry.join_group(g.name)
         self._refresh_results_for(card.oracle_id)
 
 

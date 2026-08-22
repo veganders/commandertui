@@ -780,7 +780,9 @@ class CardGroupEditorScreen(ModalScreen[None]):
         lv = self.query_one("#cge-list", ListView)
         lv.focus()
         if name.lower() not in existing:
-            lv.index = len(self._deck.groups) - 1
+            new_idx = next((i for i, g in enumerate(self._deck.groups) if g.name == name), None)
+            if new_idx is not None:
+                lv.index = new_idx
 
     def action_dismiss_screen(self) -> None:
         self.dismiss(None)

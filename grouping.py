@@ -116,8 +116,7 @@ class NamedGrouper(CardGrouper):
 
     def groups(self, deck, passes, sorter, has_filter=False):
         result = []
-        sorted_groups = sorted(deck.groups, key=lambda g: (g.name == MAYBEBOARD, g.name.lower()))
-        for group in sorted_groups:
+        for group in deck.groups:
             raw = deck.entries_for_group(group.name)
             entries = sorted(
                 [e for e in raw if passes(e) and (group.name == MAYBEBOARD or not e.is_maybe())],
