@@ -18,7 +18,7 @@ from textual.widget import Widget
 from textual.widgets import Input, Label, ListItem, ListView, Select, Static
 from textual.widgets._footer import FooterKey
 
-from db import Card, CardDB, _norm_tag, parse_query, validate_query
+from db import Card, CardDB, _IS_PREDICATES, _norm_tag, parse_query, validate_query
 from exporter import DeckExporter
 from grouping import GroupInfo
 from models import Deck, Group
@@ -244,6 +244,7 @@ def build_filter_candidates(db: "CardDB") -> "dict[str, list[str]]":
         "otag:": sorted({t for tags in db.tags.values() for t in tags}),
         "t:": sorted({w for c in db.cards.values() for f in c.faces for w in extract_type_words(f.type_line)}),
         "kw:": sorted({kw for c in db.cards.values() for kw in c.keywords}),
+        "is:": sorted(_IS_PREDICATES),
     }
 
 
@@ -1037,6 +1038,8 @@ class CardDetail(VerticalScroll):
             t.append("\n")
             if face.oracle_text:
                 t.append(face.oracle_text + "\n")
+        if card.game_changer:
+            t.append("\n✦ Game Changer\n", style="bold yellow")
         tags = db.get_tags(card.oracle_id)
         if tags:
             t.append("\nTags\n", style="bold")

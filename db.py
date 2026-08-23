@@ -5,7 +5,7 @@ import re
 from dataclasses import dataclass, field
 from rich.text import Text
 from pathlib import Path
-from typing import Optional, Union
+from typing import Callable, Optional, Union
 
 from scryfall import load_bulk
 
@@ -38,6 +38,7 @@ class Card:
     layout: str
     printings: list["Printing"] = field(default_factory=list)
     faces: list[CardFace] = field(default_factory=list)
+    game_changer: bool = False
 
     def has_type(self, text: str) -> bool:
         return any(text in f.type_line for f in self.faces)
@@ -70,11 +71,27 @@ class Card:
                 t.append(f"[{mana}]", style="dim")
                 t.append(" ")
             t.append(self.name)
+        if self.game_changer:
+            t.append(" [GC]", style="bold yellow")
         if 0 <= printing_idx < len(self.printings):
             price = self.printings[printing_idx].prices.get(currency)
             if price is not None:
                 t.append(f" [{currency.upper()}: {price:.2f}]", style="dim")
         return t
+
+
+# Predicates for the `is:` search filter.  Values are matched case-insensitively.
+_IS_PREDICATES: dict[str, Callable[["Card"], bool]] = {
+    "permanent":   lambda c: any(c.has_type(t) for t in ("creature", "artifact", "enchantment", "planeswalker", "land", "battle")),
+    "historic":    lambda c: any(c.has_type(t) for t in ("artifact", "legendary", "saga")),
+    "party":       lambda c: any(c.has_type(t) for t in ("cleric", "rogue", "warrior", "wizard")),
+    "commander":   lambda c: (c.has_type("legendary") and c.has_type("creature")) or c.has_type("background") or c.has_oracle("can be your commander"),
+    "gamechanger": lambda c: c.game_changer,
+    "outlaw":      lambda c: any(c.has_type(t) for t in ("assassin", "mercenary", "pirate", "rogue", "warlock")),
+    "vanilla":     lambda c: c.has_type("creature") and all(not f.oracle_text.strip() for f in c.faces),
+    "split":       lambda c: c.layout == "split",
+    "transform":   lambda c: c.layout == "transform",
+}
 
 
 # Price sources present in Scryfall data keyed without finish suffix.
@@ -154,6 +171,7 @@ def _parse_card(raw: dict) -> Optional[Card]:
         layout=layout,
         printings=_extract_printings(raw),
         faces=faces,
+        game_changer=raw.get("game_changer", False),
     )
 
 
@@ -566,6 +584,9 @@ def _eval_atom(atom: Atom, card: Card, tags: list[str], tags_norm: frozenset[str
             fn = _CMP_OPS.get(op, float.__eq__)
             prices = [p.prices[key] for p in card.printings if key in p.prices]
             return bool(prices) and fn(min(prices), threshold)
+        case 'is':
+            pred = _IS_PREDICATES.get(value.lower())
+            return pred(card) if pred is not None else False
         case _:
             return value.lower() in card.name.lower()
 
@@ -592,6 +613,8 @@ def _validate_atom(atom: Atom) -> bool:
             float(num)
         except ValueError:
             return False
+    if atom.key == 'is':
+        return atom.value.lower() in _IS_PREDICATES
     if atom.key in ('o', 'oracle'):
         v = atom.value
         if v.startswith('/') and v.endswith('/') and len(v) >= 2:

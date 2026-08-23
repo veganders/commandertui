@@ -18,6 +18,7 @@ from archidekt_import import ArchidektImporter
 from clipboard import ClipboardExporter
 from importer import DeckImporter
 from db import Card, CardDB, load_db, parse_query
+from scryfall import DATA_DIR, MAX_AGE_DAYS, _age_days, data_ready, sync_bulk_data
 from deck_io import list_decks, load_deck, save_deck
 from models import MAYBEBOARD, CardEntry, CardRole, Deck, Group
 from partner import partner_mode, partner_filter
@@ -636,6 +637,16 @@ def _ensure_permanent_groups(deck: Deck) -> None:
 
 
 if __name__ == "__main__":
+    if not data_ready():
+        print("Card data is missing or outdated — downloading…")
+        sync_bulk_data(force=True)
+    else:
+        _cards_file = DATA_DIR / "default_cards.jsonl.gz"
+        _age = _age_days(_cards_file)
+        if _age > MAX_AGE_DAYS:
+            _answer = input(f"Card data is {_age:.0f} days old. Update now? [Y/n]: ").strip().lower()
+            if _answer in ("", "y", "yes"):
+                sync_bulk_data(force=True)
     db = load_db()
     settings = Settings.load()
     DeckbuilderApp(db, _fresh_deck(), settings).run()

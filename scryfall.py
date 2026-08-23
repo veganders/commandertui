@@ -11,6 +11,12 @@ BULK_DATA_URL = "https://api.scryfall.com/bulk-data"
 DATA_DIR = Path(__file__).parent / "data"
 MAX_AGE_DAYS = 30
 
+# Bump this whenever the set of fields kept in the local data files changes.
+# The app checks this at startup and auto-downloads if the stored version is lower.
+CURRENT_SCHEMA_VERSION = 2
+
+_SCHEMA_VERSION_FILE = DATA_DIR / "schema_version"
+
 WANTED_TYPES = {"default_cards", "rulings", "oracle_tags"}
 
 
@@ -21,6 +27,21 @@ def _age_days(path: Path) -> float:
 
 def _needs_update(path: Path) -> bool:
     return not path.exists() or _age_days(path) > MAX_AGE_DAYS
+
+
+def data_schema_version() -> int:
+    """Return the schema version of the locally stored data (0 if unknown)."""
+    try:
+        return int(_SCHEMA_VERSION_FILE.read_text().strip())
+    except (FileNotFoundError, ValueError):
+        return 0
+
+
+def data_ready() -> bool:
+    """Return True when all data files exist and match the current schema version."""
+    if data_schema_version() < CURRENT_SCHEMA_VERSION:
+        return False
+    return all((DATA_DIR / f"{t}.jsonl.gz").exists() for t in WANTED_TYPES)
 
 
 def _is_commander_legal(card: dict) -> bool:
@@ -35,6 +56,7 @@ _CARD_KEEP_FIELDS = frozenset({
     "power", "toughness", "loyalty",
     "card_faces", "finishes", "prices", "set", "set_name",
     "collector_number", "id",
+    "game_changer",
 })
 _CARD_FACE_KEEP_FIELDS = frozenset({"name", "mana_cost", "oracle_text", "type_line", "power", "toughness", "loyalty"})
 
@@ -133,6 +155,7 @@ def sync_bulk_data(force: bool = False) -> None:
         print(f"  {bulk_type}: downloading (last updated {updated_at})")
         _download(entry["jsonl_download_uri"], dest, keep=_POSTPROCESS.get(bulk_type), strip=_STRIP.get(bulk_type))
 
+    _SCHEMA_VERSION_FILE.write_text(str(CURRENT_SCHEMA_VERSION))
     print("Done.")
 
 
