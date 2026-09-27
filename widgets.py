@@ -18,7 +18,7 @@ from textual.widget import Widget
 from textual.widgets import Input, Label, ListItem, ListView, Select, Static
 from textual.widgets._footer import FooterKey
 
-from db import Card, CardDB, _IS_PREDICATES, _norm_tag, parse_query, validate_query
+from db import Card, CardDB, _IS_PREDICATES, _norm_tag, extract_type_words, parse_query, validate_query
 from exporter import DeckExporter
 from grouping import GroupInfo
 from models import Deck, Group
@@ -230,37 +230,18 @@ class QueryInput(Input):
 
 # ── Filter token autocomplete helpers ─────────────────────────────────────────
 
-# Two-word creature/card types that must not be split. Extend this list when
-# a new multi-word type is introduced.
-_MULTIWORD_TYPES: list[str] = ["time lord"]
-
-
 def build_filter_candidates(db: "CardDB") -> "dict[str, list[str]]":
     """Build the autocomplete candidate lists for all supported filter prefixes.
 
     Expensive (scans all cards), so call once per session and reuse the result.
+    Uses the pre-built card_type_tokens index from the DB.
     """
     return {
         "otag:": sorted({t for tags in db.tags.values() for t in tags}),
-        "t:": sorted({w for c in db.cards.values() for f in c.faces for w in extract_type_words(f.type_line)}),
+        "t:": sorted({tok for tokens in db.card_type_tokens.values() for tok in tokens}),
         "kw:": sorted({kw for c in db.cards.values() for kw in c.keywords}),
         "is:": sorted(_IS_PREDICATES),
     }
-
-
-def extract_type_words(type_line: str) -> set[str]:
-    """Return all individual and multi-word type tokens from a type line.
-
-    Handles split-card separators (//) and preserves entries in _MULTIWORD_TYPES.
-    """
-    line = type_line.replace("—", " ")
-    words: set[str] = set()
-    for mwt in _MULTIWORD_TYPES:
-        if mwt in line:
-            words.add(mwt)
-            line = line.replace(mwt, " ")
-    words.update(w for w in line.split() if w != "//")
-    return words
 
 
 def _filter_token_context(
@@ -1054,3 +1035,103 @@ class CardDetail(VerticalScroll):
     def on_select_changed(self, event: Select.Changed) -> None:
         if event.select.id == "cd-printing-select" and isinstance(event.value, _PrintingKey):
             self.post_message(self.PrintingSelected(event.value.oracle_id, event.value.idx))
+
+
+# ── AttributeChip ─────────────────────────────────────────────────────────────
+
+class AttributeChip(Widget):
+    """A three-state toggle chip used in the Find-Similar attribute panel.
+
+    States cycle untracked → tracked → forced on each click or Enter/Space.
+      untracked  — attribute is ignored in scoring
+      tracked    — attribute contributes to similarity score
+      forced     — attribute must be present on every result
+    """
+
+    can_focus = True
+    DEFAULT_CSS = """
+    AttributeChip {
+        padding: 0 1;
+        margin: 0 1 0 0;
+        height: 1;
+        width: auto;
+    }
+    AttributeChip:focus { text-style: bold; }
+    """
+
+    _CYCLE: tuple[str, ...] = ("untracked", "tracked", "locked")
+
+    class StateChanged(Message):
+        """Posted when the chip cycles to a new state."""
+
+        def __init__(self, chip: "AttributeChip") -> None:
+            super().__init__()
+            self.chip = chip
+
+    def __init__(self, key: str, label: str, state: str = "untracked") -> None:
+        super().__init__(classes=state)
+        self.key = key          # namespaced key, e.g. "tag:ramp", "kw:flying"
+        self._label = label     # display text, e.g. "ramp", "flying"
+        self._state = state
+
+    @property
+    def state(self) -> str:
+        return self._state
+
+    def _advance(self) -> None:
+        old = self._state
+        self.remove_class(old)
+        self._state = self._CYCLE[(self._CYCLE.index(old) + 1) % len(self._CYCLE)]
+        self.add_class(self._state)
+        self.post_message(self.StateChanged(self))
+
+    def on_click(self) -> None:
+        self._advance()
+
+    def on_key(self, event: events.Key) -> None:
+        if event.key in ("enter", "space"):
+            event.stop()
+            self._advance()
+        elif event.key in ("left", "right"):
+            event.stop()
+            # Navigate within the current row (wrapping).
+            row_chips = [c for c in self.parent.children if isinstance(c, AttributeChip)]
+            if not row_chips:
+                return
+            try:
+                idx = row_chips.index(self)
+            except ValueError:
+                return
+            step = -1 if event.key == "left" else 1
+            row_chips[(idx + step) % len(row_chips)].focus()
+        elif event.key in ("up", "down"):
+            event.stop()
+            # Navigate between rows, keeping column position (clamped).
+            # At the top row, up goes to the search bar.
+            # At the bottom row, down goes to the card list.
+            panel = self.parent.parent  # Horizontal.chip-row → Vertical#attr-chips
+            rows = [c for c in panel.children if isinstance(c, Horizontal)]
+            try:
+                row_idx = rows.index(self.parent)
+            except ValueError:
+                return
+            if event.key == "up" and row_idx == 0:
+                self.screen.query_one("#sim-input").focus()
+                return
+            if event.key == "down" and row_idx == len(rows) - 1:
+                self.screen.query_one("#card-list").focus()
+                return
+            step = -1 if event.key == "up" else 1
+            new_row = rows[row_idx + step]
+            new_chips = [c for c in new_row.children if isinstance(c, AttributeChip)]
+            if not new_chips:
+                return
+            cur_chips = [c for c in self.parent.children if isinstance(c, AttributeChip)]
+            try:
+                col = cur_chips.index(self)
+            except ValueError:
+                col = 0
+            new_chips[min(col, len(new_chips) - 1)].focus()
+
+    def render(self) -> str:
+        return self._label

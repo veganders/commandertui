@@ -14,6 +14,26 @@ DATA_DIR = Path(__file__).parent / "data"
 # Layouts where oracle_text and mana_cost live inside card_faces, not at top level.
 _SPLIT_LAYOUTS = {"transform", "modal_dfc", "flip", "split", "adventure", "battle", "prepare"}
 
+# Type-line token parsing (used for card_type_tokens index and t: search).
+_MULTIWORD_TYPES: list[str] = ["time lord"]
+
+
+def extract_type_words(type_line: str) -> frozenset[str]:
+    """Parse a card type line into individual type tokens.
+
+    Preserves multi-word types (e.g. "time lord") as single tokens.
+    Handles // separators and the — supertype/subtype divider.
+    """
+    result: set[str] = set()
+    line = type_line.replace("//", " ")
+    for mwt in _MULTIWORD_TYPES:
+        if mwt in line:
+            result.add(mwt)
+            line = line.replace(mwt, " ")
+    line = line.replace("—", " ")
+    result.update(t for t in line.split() if t)
+    return frozenset(result)
+
 
 @dataclass
 class CardFace:
@@ -185,6 +205,7 @@ class CardDB:
     tag_ancestors: dict[str, frozenset[str]] = field(default_factory=dict)   # tag label → ancestor labels
     tag_descriptions: dict[str, str] = field(default_factory=dict)          # tag label → description (may be "")
     tag_parents: dict[str, list[str]] = field(default_factory=dict)         # tag label → direct parent labels
+    card_type_tokens: dict[str, frozenset[str]] = field(default_factory=dict)  # oracle_id → type tokens
 
     def search(
         self,
@@ -242,7 +263,8 @@ class CardDB:
             card for card in self.cards.values()
             if _eval_node(node, card,
                           self.tags.get(card.oracle_id, []),
-                          self.tags_norm.get(card.oracle_id, frozenset()))
+                          self.tags_norm.get(card.oracle_id, frozenset()),
+                          self.card_type_tokens.get(card.oracle_id, frozenset()))
         ]
 
     def get_rulings(self, oracle_id: str) -> list[str]:
@@ -253,6 +275,9 @@ class CardDB:
 
     def get_leaf_tags(self, oracle_id: str) -> list[str]:
         return self.leaf_tags.get(oracle_id, [])
+
+    def get_type_tokens(self, oracle_id: str) -> frozenset[str]:
+        return self.card_type_tokens.get(oracle_id, frozenset())
 
 
 # ── Query AST ─────────────────────────────────────────────────────────────────
@@ -516,7 +541,8 @@ def _norm_tag(s: str) -> str:
     return s.replace(" ", "").replace("-", "").lower()
 
 
-def _eval_atom(atom: Atom, card: Card, tags: list[str], tags_norm: frozenset[str]) -> bool:
+def _eval_atom(atom: Atom, card: Card, tags: list[str], tags_norm: frozenset[str],
+               type_tokens: frozenset[str] = frozenset()) -> bool:
     key, value = atom.key, atom.value
     match key:
         case 'o' | 'oracle':
@@ -529,8 +555,7 @@ def _eval_atom(atom: Atom, card: Card, tags: list[str], tags_norm: frozenset[str
             q = value.lower()
             return any(q in f.oracle_text.lower() for f in card.faces)
         case 't' | 'type':
-            pat = re.compile(r'\b' + re.escape(value.lower()) + r'\b')
-            return any(pat.search(f.type_line) for f in card.faces)
+            return value.lower() in type_tokens
         case 'id':
             m = _VALUE_CMP_RE.match(value)
             op, raw = (m.group(1), m.group(2)) if m else (None, value)
@@ -591,17 +616,18 @@ def _eval_atom(atom: Atom, card: Card, tags: list[str], tags_norm: frozenset[str
             return value.lower() in card.name.lower()
 
 
-def _eval_node(node: QueryNode, card: Card, tags: list[str], tags_norm: frozenset[str]) -> bool:
+def _eval_node(node: QueryNode, card: Card, tags: list[str], tags_norm: frozenset[str],
+               type_tokens: frozenset[str] = frozenset()) -> bool:
     if isinstance(node, Atom):
-        return _eval_atom(node, card, tags, tags_norm)
+        return _eval_atom(node, card, tags, tags_norm, type_tokens)
     if isinstance(node, And):
-        return all(_eval_node(c, card, tags, tags_norm) for c in node.children)
+        return all(_eval_node(c, card, tags, tags_norm, type_tokens) for c in node.children)
     if isinstance(node, Or):
-        return any(_eval_node(c, card, tags, tags_norm) for c in node.children)
+        return any(_eval_node(c, card, tags, tags_norm, type_tokens) for c in node.children)
     if isinstance(node, Not):
-        return not _eval_node(node.child, card, tags, tags_norm)
+        return not _eval_node(node.child, card, tags, tags_norm, type_tokens)
     if isinstance(node, AtLeastN):
-        count = sum(1 for c in node.children if _eval_node(c, card, tags, tags_norm))
+        count = sum(1 for c in node.children if _eval_node(c, card, tags, tags_norm, type_tokens))
         return count >= node.n
 
 
@@ -734,6 +760,14 @@ def load_db() -> CardDB:
 
     tagged_count = sum(1 for v in db.tags.values() if v)
     print(f"  {tagged_count} cards with oracle tags")
+
+    print("Indexing type tokens...")
+    for oracle_id, card in db.cards.items():
+        tokens: set[str] = set()
+        for face in card.faces:
+            tokens |= extract_type_words(face.type_line)
+        db.card_type_tokens[oracle_id] = frozenset(tokens)
+    print(f"  {len(db.card_type_tokens)} cards indexed")
 
     return db
 
