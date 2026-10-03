@@ -28,7 +28,7 @@ from similar import SimilarCardsScreen
 from settings import Settings
 from grouping import CardGrouper, GroupInfo, MVGrouper, NamedGrouper, TagGrouper, TypeGrouper
 from sorting import CardSorter, MVSorter, NameSorter, PriceSorter
-from widgets import CardDetail, CardGroupEditorScreen, DeckNameModal, ExportModal, FilterSuggestions, GroupNameModal, ImportUrlModal, OpenDeckScreen, QueryInput, TopBar, WrappingFooter, build_filter_candidates
+from widgets import CardDetail, CardGroupEditorScreen, DeckNameModal, ExportModal, FilterSuggestions, GroupNameModal, ImportUrlModal, OpenDeckScreen, QueryInput, SettingsScreen, TopBar, WrappingFooter, build_filter_candidates
 
 _EXPORTERS = [ArchidektExporter(), ClipboardExporter()]
 _IMPORTERS: list[DeckImporter] = [ArchidektImporter()]
@@ -75,6 +75,7 @@ class MainScreen(Screen):
         Binding("-", "decrement_card", "-1"),
         Binding("x", "color_scout", "Color Scout"),
         Binding("f", "find_similar", "Find similar"),
+        Binding("question_mark", "open_settings", "Settings"),
     ]
 
     def __init__(self, db: CardDB, deck: Deck, settings: Settings) -> None:
@@ -518,6 +519,9 @@ class MainScreen(Screen):
             callback=on_done,
         )
 
+    def action_open_settings(self) -> None:
+        self.app.push_screen(SettingsScreen(self._settings))
+
     def action_search_partner(self) -> None:
         commander = self._deck.commander
         if commander is None:
@@ -649,4 +653,5 @@ if __name__ == "__main__":
                 sync_bulk_data(force=True)
     db = load_db()
     settings = Settings.load()
+    db.settings = settings
     DeckbuilderApp(db, _fresh_deck(), settings).run()

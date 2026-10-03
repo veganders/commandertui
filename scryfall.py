@@ -13,7 +13,7 @@ MAX_AGE_DAYS = 30
 
 # Bump this whenever the set of fields kept in the local data files changes.
 # The app checks this at startup and auto-downloads if the stored version is lower.
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 3
 
 _SCHEMA_VERSION_FILE = DATA_DIR / "schema_version"
 
@@ -44,12 +44,26 @@ def data_ready() -> bool:
     return all((DATA_DIR / f"{t}.jsonl.gz").exists() for t in WANTED_TYPES)
 
 
-def _is_commander_legal(card: dict) -> bool:
-    return card.get("legalities", {}).get("commander") == "legal"
+# Layouts that represent non-playable game objects (tokens, planes, schemes …).
+# Cards with these layouts are excluded at download time regardless of legality.
+_EXCLUDE_LAYOUTS: frozenset[str] = frozenset({
+    "token", "double_faced_token", "emblem",
+    "scheme", "plane", "phenomenon", "vanguard", "art_series",
+})
+
+
+def _is_commander_candidate(card: dict) -> bool:
+    """Keep any card that could plausibly be used in a Commander deck.
+
+    Excludes tokens, emblems, schemes, planes and other non-card game objects.
+    Retains legal, banned, and not-legal cards so user settings can control
+    what is visible without requiring a re-download.
+    """
+    return card.get("layout", "normal") not in _EXCLUDE_LAYOUTS
 
 
 # Whitelist of top-level fields to keep for default_cards.
-# legalities is intentionally excluded — only used for filtering, not stored.
+# legalities is NOT kept directly — _strip_card extracts just the commander value.
 _CARD_KEEP_FIELDS = frozenset({
     "oracle_id", "name", "type_line", "oracle_text", "mana_cost", "cmc",
     "colors", "color_identity", "keywords", "rarity", "layout",
@@ -57,6 +71,7 @@ _CARD_KEEP_FIELDS = frozenset({
     "card_faces", "finishes", "prices", "set", "set_name",
     "collector_number", "id",
     "game_changer",
+    "released_at",
 })
 _CARD_FACE_KEEP_FIELDS = frozenset({"name", "mana_cost", "oracle_text", "type_line", "power", "toughness", "loyalty"})
 
@@ -68,12 +83,14 @@ def _strip_card(card: dict) -> dict:
             {k: v for k, v in face.items() if k in _CARD_FACE_KEEP_FIELDS}
             for face in stripped["card_faces"]
         ]
+    # Extract the commander legality value from the legalities dict.
+    stripped["commander_legal"] = card.get("legalities", {}).get("commander", "not_legal")
     return stripped
 
 
 # Post-processing filters applied after download, keyed by bulk type.
 _POSTPROCESS: dict[str, object] = {
-    "default_cards": _is_commander_legal,
+    "default_cards": _is_commander_candidate,
 }
 
 # Field strippers applied after filtering, keyed by bulk type.

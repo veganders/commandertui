@@ -177,6 +177,17 @@ class TestTokenize:
             "[otag:lifegain, otag:counters]{1}",
         ]
 
+    def test_slash_in_oracle_value_not_regex(self):
+        # "2/2" contains a slash but is NOT a regex — must not eat the next token
+        assert _tokenize("o:2/2 eur<2") == ["o:2/2", "eur<2"]
+
+    def test_regex_after_colon_still_works(self):
+        assert _tokenize("o:/draw|scry/ t:creature") == ["o:/draw|scry/", "t:creature"]
+
+    def test_slash_in_value_only_after_colon_triggers_regex(self):
+        # slash is only a regex opener when immediately after ':'
+        assert _tokenize("o:a/b t:c/d") == ["o:a/b", "t:c/d"]
+
 
 # ── parse_query ───────────────────────────────────────────────────────────────
 

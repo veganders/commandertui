@@ -100,6 +100,7 @@ When such a card is set as commander or partner, `SearchScreen._maybe_prompt_col
 | `+` | Increment copy count for the focused card (only if `card.allows_multiple()`) |
 | `-` | Decrement copy count for the focused card |
 | `x` | Open Color Scout (explore card counts by color identity) |
+| `?` | Open Settings (card pool filters, currency) |
 | `q` | Quit |
 
 ---

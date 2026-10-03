@@ -8,12 +8,20 @@ from pathlib import Path
 
 _SETTINGS_PATH = Path.home() / ".config" / "deckbuilder" / "settings.json"
 
-_KNOWN: set[str] = {"currency"}
+_KNOWN: set[str] = {
+    "currency",
+    "show_legal", "show_not_legal", "show_banned", "show_unreleased",
+}
 
 
 @dataclass
 class Settings:
     currency: str = "usd"
+    # Card pool filters (applied at load time; changes require a restart).
+    show_legal: bool = True       # commander-legal, released cards
+    show_not_legal: bool = False  # silver-border, Un sets, etc.
+    show_banned: bool = False     # cards banned in Commander
+    show_unreleased: bool = False # cards not yet released in paper
 
     @classmethod
     def load(cls) -> "Settings":

@@ -15,7 +15,7 @@ from textual.message import Message
 from textual.reactive import reactive
 from textual.screen import ModalScreen
 from textual.widget import Widget
-from textual.widgets import Input, Label, ListItem, ListView, Select, Static
+from textual.widgets import Input, Label, ListItem, ListView, Select, Static, Switch
 from textual.widgets._footer import FooterKey
 
 from db import Card, CardDB, _IS_PREDICATES, _norm_tag, extract_type_words, parse_query, validate_query
@@ -1135,3 +1135,68 @@ class AttributeChip(Widget):
 
     def render(self) -> str:
         return self._label
+
+
+# ── SettingsScreen ─────────────────────────────────────────────────────────────
+
+_CARD_POOL_ROWS: list[tuple[str, str, str]] = [
+    ("show_legal",      "Legal",       "Standard commander-legal cards"),
+    ("show_not_legal",  "Not legal",   "Silver-border and Un-set cards"),
+    ("show_banned",     "Banned",      "Cards banned in Commander"),
+    ("show_unreleased", "Unreleased",  "Cards not yet released in paper"),
+]
+
+
+class SettingsScreen(ModalScreen[None]):
+    """Application settings modal (opened with ?)."""
+
+    BINDINGS = [Binding("escape", "dismiss_screen", "Close")]
+
+    CSS = """
+    SettingsScreen {
+        align: center middle;
+        background: $background 60%;
+    }
+    #settings-box {
+        width: 60;
+        height: auto;
+        background: $surface;
+        padding: 1 2;
+    }
+    #settings-title {
+        text-style: bold;
+        margin-bottom: 1;
+    }
+    #settings-section-label { color: $text-muted; }
+    .settings-row {
+        height: 1;
+        align: left middle;
+    }
+    .settings-row-label { width: 16; }
+    .settings-row-desc { color: $text-muted; width: 1fr; }
+    Switch { border: none; height: 1; margin: 0; padding: 0; }
+    Switch:focus .switch--slider { background: $primary 30%; }
+    """
+
+    def __init__(self, settings: Settings) -> None:
+        super().__init__()
+        self._settings = settings
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="settings-box"):
+            yield Label("Settings", id="settings-title")
+            yield Label("Card pool", id="settings-section-label")
+            for field_name, label, desc in _CARD_POOL_ROWS:
+                with Horizontal(classes="settings-row", id=f"row-{field_name}"):
+                    yield Label(label, classes="settings-row-label")
+                    yield Label(desc, classes="settings-row-desc")
+                    yield Switch(value=getattr(self._settings, field_name), id=field_name)
+
+    def on_switch_changed(self, event: Switch.Changed) -> None:
+        field_name = event.switch.id
+        if field_name and hasattr(self._settings, field_name):
+            setattr(self._settings, field_name, event.value)
+            self._settings.save()
+
+    def action_dismiss_screen(self) -> None:
+        self.dismiss(None)

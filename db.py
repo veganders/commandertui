@@ -3,11 +3,13 @@
 import json
 import re
 from dataclasses import dataclass, field
+from datetime import date  # used by _card_passes_filter
 from rich.text import Text
 from pathlib import Path
 from typing import Callable, Optional, Union
 
 from scryfall import load_bulk
+from settings import Settings
 
 DATA_DIR = Path(__file__).parent / "data"
 
@@ -59,6 +61,8 @@ class Card:
     printings: list["Printing"] = field(default_factory=list)
     faces: list[CardFace] = field(default_factory=list)
     game_changer: bool = False
+    commander_legal: str = "legal"   # from legalities.commander: "legal" / "not_legal" / "banned"
+    released_at: str = ""            # ISO date string, e.g. "2024-11-08"; empty for old data
 
     def has_type(self, text: str) -> bool:
         return any(text in f.type_line for f in self.faces)
@@ -192,6 +196,8 @@ def _parse_card(raw: dict) -> Optional[Card]:
         printings=_extract_printings(raw),
         faces=faces,
         game_changer=raw.get("game_changer", False),
+        commander_legal=raw.get("commander_legal", "legal"),
+        released_at=raw.get("released_at", ""),
     )
 
 
@@ -206,6 +212,7 @@ class CardDB:
     tag_descriptions: dict[str, str] = field(default_factory=dict)          # tag label → description (may be "")
     tag_parents: dict[str, list[str]] = field(default_factory=dict)         # tag label → direct parent labels
     card_type_tokens: dict[str, frozenset[str]] = field(default_factory=dict)  # oracle_id → type tokens
+    settings: Settings = field(default_factory=Settings)
 
     def search(
         self,
@@ -258,13 +265,18 @@ class CardDB:
         return list(results)
 
     def query(self, node: "QueryNode") -> list[Card]:
-        """Evaluate a parsed AST against all cards and return matches."""
+        """Evaluate a parsed AST against all cards and return matches.
+
+        Cards excluded by db.settings card-pool toggles are omitted automatically.
+        """
+        today = date.today().isoformat()
         return [
             card for card in self.cards.values()
             if _eval_node(node, card,
                           self.tags.get(card.oracle_id, []),
                           self.tags_norm.get(card.oracle_id, frozenset()),
                           self.card_type_tokens.get(card.oracle_id, frozenset()))
+            and _card_passes_filter(card, self.settings, today)
         ]
 
     def get_rulings(self, oracle_id: str) -> list[str]:
@@ -347,8 +359,10 @@ def _split_threshold_parts(s: str) -> list[str]:
             depth += 1; i += 1
         elif c == ']':
             depth -= 1; i += 1
-        elif c in ('"', '/') and depth == 0:
-            i = _skip_delimited(s, i, c)
+        elif c == '"' and depth == 0:
+            i = _skip_delimited(s, i, '"')
+        elif c == '/' and depth == 0 and i > 0 and s[i - 1] == ':':
+            i = _skip_delimited(s, i, '/')
         elif c == ',' and depth == 0:
             parts.append(s[start:i])
             start = i + 1
@@ -373,8 +387,10 @@ def _scan_bracket_token(query: str, i: int, n: int) -> int:
             depth += 1; i += 1
         elif query[i] == ']':
             depth -= 1; i += 1
-        elif query[i] in ('"', '/'):
-            i = _skip_delimited(query, i, query[i])
+        elif query[i] == '"':
+            i = _skip_delimited(query, i, '"')
+        elif query[i] == '/' and i > 0 and query[i - 1] == ':':
+            i = _skip_delimited(query, i, '/')
         else:
             i += 1
     # optionally consume trailing {N}
@@ -408,8 +424,10 @@ def _tokenize(query: str) -> list[str]:
             continue
         start = i
         while i < n and not query[i].isspace() and query[i] not in '()':
-            if query[i] in ('"', '/'):
-                i = _skip_delimited(query, i, query[i])
+            if query[i] == '"':
+                i = _skip_delimited(query, i, '"')
+            elif query[i] == '/' and i > start and query[i - 1] == ':':
+                i = _skip_delimited(query, i, '/')
             else:
                 i += 1
         tok = query[start:i]
@@ -667,6 +685,18 @@ def validate_query(node: QueryNode) -> bool:
     return True
 
 
+def _card_passes_filter(card: "Card", settings: Settings, today: str) -> bool:
+    """Return True if card should be included given current settings."""
+    is_unreleased = bool(card.released_at) and card.released_at > today
+    if is_unreleased:
+        return settings.show_unreleased
+    if card.commander_legal == "legal":
+        return settings.show_legal
+    if card.commander_legal == "banned":
+        return settings.show_banned
+    return settings.show_not_legal  # "not_legal", "restricted", etc.
+
+
 def load_db() -> CardDB:
     """Load all bulk data and return a fully indexed CardDB."""
     db = CardDB()
@@ -681,12 +711,18 @@ def load_db() -> CardDB:
             continue
         if oid in db.cards:
             db.cards[oid].printings.extend(_extract_printings(raw))
+            # Keep the earliest known release date so a future reprint doesn't
+            # make an already-released card appear unreleased.
+            new_date = raw.get("released_at", "")
+            card = db.cards[oid]
+            if new_date and (not card.released_at or new_date < card.released_at):
+                card.released_at = new_date
         else:
             card = _parse_card(raw)
             if card:
                 db.cards[oid] = card
 
-    print(f"  {len(db.cards)} commander-legal cards loaded")
+    print(f"  {len(db.cards)} cards loaded")
 
     print("Loading rulings...")
     raw_rulings: list[dict] = load_bulk("rulings")
