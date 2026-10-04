@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from enum import Enum, auto
 from pathlib import Path
 from typing import Callable, NamedTuple, Optional
 
@@ -15,14 +16,14 @@ from textual.message import Message
 from textual.reactive import reactive
 from textual.screen import ModalScreen
 from textual.widget import Widget
-from textual.widgets import Input, Label, ListItem, ListView, Select, Static, Switch
+from textual.widgets import Button, DataTable, Input, Label, ListItem, ListView, Select, Static, Switch
 from textual.widgets._footer import FooterKey
 
 from db import Card, CardDB, _IS_PREDICATES, _norm_tag, extract_type_words, parse_query, validate_query
 from exporter import DeckExporter
 from grouping import GroupInfo
 from models import Deck, Group
-from settings import Settings
+from settings import RoutingRule, RuleScope, Settings
 
 # ── Display constants ──────────────────────────────────────────────────────────
 
@@ -522,6 +523,53 @@ class GroupNameModal(ModalScreen[Optional[str]]):
         self.dismiss(None)
 
 
+# ── UnsavedChangesModal ────────────────────────────────────────────────────────
+
+class UnsavedChoice(Enum):
+    SAVE = auto()
+    DISCARD = auto()
+    CANCEL = auto()
+
+
+class UnsavedChangesModal(ModalScreen[UnsavedChoice]):
+    """Ask what to do with unsaved changes. Dismisses with a UnsavedChoice."""
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    CSS = """
+    UnsavedChangesModal { align: center middle; background: $background 60%; }
+    #unsaved-box {
+        width: 64;
+        height: auto;
+        background: $surface;
+        padding: 1 2;
+    }
+    #unsaved-title { text-style: bold; margin-bottom: 1; }
+    #unsaved-buttons { height: auto; align: left middle; margin-top: 1; }
+    #unsaved-buttons Button { margin-right: 1; height: 1; min-height: 1; border: none; padding: 0 1; }
+    """
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="unsaved-box"):
+            yield Label("Unsaved changes", id="unsaved-title")
+            yield Label("You have unsaved changes. What would you like to do?")
+            with Horizontal(id="unsaved-buttons"):
+                yield Button("Save & continue", id="btn-save", variant="primary")
+                yield Button("Discard",         id="btn-discard", variant="error")
+                yield Button("Cancel",          id="btn-cancel")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn-save":
+            self.dismiss(UnsavedChoice.SAVE)
+        elif event.button.id == "btn-discard":
+            self.dismiss(UnsavedChoice.DISCARD)
+        else:
+            self.dismiss(UnsavedChoice.CANCEL)
+
+    def action_cancel(self) -> None:
+        self.dismiss(UnsavedChoice.CANCEL)
+
+
 # ── DeckNameModal ──────────────────────────────────────────────────────────────
 
 class DeckNameModal(ModalScreen[Optional[str]]):
@@ -753,10 +801,8 @@ class CardGroupEditorScreen(ModalScreen[None]):
             return
         existing = {g.name.lower() for g in self._deck.groups}
         if name.lower() not in existing:
-            self._deck.groups.append(Group(name=name))
-            entry = self._deck.get_entry(self._card.oracle_id)
-            if entry is not None:
-                entry.join_group(name)
+            self._deck.add_group(name)
+            self._deck.entry_join_group(self._card.oracle_id, name)
         event.input.value = ""
         self._rebuild_list()
         lv = self.query_one("#cge-list", ListView)
@@ -778,10 +824,11 @@ class CardGroupEditorScreen(ModalScreen[None]):
         entry = self._deck.get_entry(self._card.oracle_id)
         if entry is None:
             return
+        oracle_id = self._card.oracle_id
         if entry.in_group(group.name):
-            entry.leave_group(group.name)
+            self._deck.entry_leave_group(oracle_id, group.name)
         else:
-            entry.join_group(group.name)
+            self._deck.entry_join_group(oracle_id, group.name)
         self._rebuild_list()
 
     def action_increment_group(self) -> None:
@@ -1146,57 +1193,229 @@ _CARD_POOL_ROWS: list[tuple[str, str, str]] = [
     ("show_unreleased", "Unreleased",  "Cards not yet released in paper"),
 ]
 
+_RULE_COL_GROUP   = "Group"
+_RULE_COL_QUERY   = "Query"
+_RULE_COL_ENABLED = "Enabled"
+_RULE_COL_SCOPE   = "Scope"
+
+
+class _RuleEditModal(ModalScreen[Optional[str]]):
+    """Single-field edit modal for a routing rule cell (query or group name)."""
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    CSS = """
+    _RuleEditModal { align: center middle; background: $background 60%; }
+    #edit-box { width: 50; height: auto; background: $surface; padding: 1 2; }
+    #edit-title { text-style: bold; margin-bottom: 1; }
+    """
+
+    def __init__(self, title: str, value: str) -> None:
+        super().__init__()
+        self._title = title
+        self._value = value
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="edit-box"):
+            yield Label(self._title, id="edit-title")
+            yield Input(value=self._value, id="edit-input")
+
+    def on_mount(self) -> None:
+        self.query_one("#edit-input", Input).focus()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self.dismiss(event.value.strip() or None)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
 
 class SettingsScreen(ModalScreen[None]):
     """Application settings modal (opened with ?)."""
 
-    BINDINGS = [Binding("escape", "dismiss_screen", "Close")]
+    class ApplyRoutesRequested(Message):
+        pass
+
+    BINDINGS = [
+        Binding("escape", "dismiss_screen", "Close"),
+        Binding("n",     "new_rule",    "New rule"),
+        Binding("d",     "delete_rule", "Delete rule"),
+    ]
 
     CSS = """
     SettingsScreen {
-        align: center middle;
         background: $background 60%;
     }
     #settings-box {
-        width: 60;
-        height: auto;
+        width: 100%;
+        height: 100%;
         background: $surface;
         padding: 1 2;
     }
-    #settings-title {
-        text-style: bold;
-        margin-bottom: 1;
-    }
-    #settings-section-label { color: $text-muted; }
-    .settings-row {
-        height: 1;
-        align: left middle;
-    }
+    #settings-title { text-style: bold; margin-bottom: 1; }
+    .settings-section-label { color: $text-muted; margin-top: 1; }
+    .settings-row { height: 1; align: left middle; }
     .settings-row-label { width: 16; }
-    .settings-row-desc { color: $text-muted; width: 1fr; }
+    .settings-row-desc { color: $text-muted; width: 40; }
     Switch { border: none; height: 1; margin: 0; padding: 0; }
     Switch:focus .switch--slider { background: $primary 30%; }
+    #rules-table { height: auto; max-height: 12; margin-top: 1; }
+    #rules-buttons { height: 1; align: left middle; margin-top: 1; }
+    #rules-buttons Button { margin-right: 1; height: 1; min-height: 1; border: none; padding: 0 1; }
     """
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, deck: Optional[Deck] = None) -> None:
         super().__init__()
         self._settings = settings
+        self._deck = deck
 
     def compose(self) -> ComposeResult:
         with Vertical(id="settings-box"):
             yield Label("Settings", id="settings-title")
-            yield Label("Card pool", id="settings-section-label")
+            yield Label("Card pool", classes="settings-section-label")
             for field_name, label, desc in _CARD_POOL_ROWS:
-                with Horizontal(classes="settings-row", id=f"row-{field_name}"):
+                with Horizontal(classes="settings-row"):
                     yield Label(label, classes="settings-row-label")
                     yield Label(desc, classes="settings-row-desc")
                     yield Switch(value=getattr(self._settings, field_name), id=field_name)
+            yield Label("Routing rules  —  Enter: edit/toggle  n: new  d: delete",
+                        classes="settings-section-label")
+            table = DataTable(id="rules-table", cursor_type="cell", show_cursor=True)
+            table.add_columns(_RULE_COL_GROUP, _RULE_COL_QUERY, _RULE_COL_ENABLED, _RULE_COL_SCOPE)
+            yield table
+            with Horizontal(id="rules-buttons"):
+                if self._deck is not None:
+                    yield Button("Apply to current deck", id="btn-apply", variant="primary")
+                yield Button("Reset to defaults", id="btn-reset", variant="error")
+
+    def on_mount(self) -> None:
+        self._rebuild_table()
+
+    # ── helpers ────────────────────────────────────────────────────────────────
+
+    def _all_rules(self) -> list[RoutingRule]:
+        rules = list(self._settings.routes)
+        if self._deck is not None:
+            rules += self._deck.local_routes
+        return rules
+
+    def _rule_row(self, rule: RoutingRule) -> tuple:
+        s = "" if rule.enabled else "dim"
+        return (
+            Text(rule.group,                              style=s),
+            Text(rule.query,                              style=s),
+            Text("Yes" if rule.enabled else "No",        style=s),
+            Text(rule.scope.value.capitalize(),           style=s),
+        )
+
+    def _rebuild_table(self) -> None:
+        table = self.query_one("#rules-table", DataTable)
+        row, col = table.cursor_row, table.cursor_column
+        table.clear()
+        for rule in self._all_rules():
+            table.add_row(*self._rule_row(rule))
+        table.move_cursor(row=min(row, max(0, table.row_count - 1)), column=col)
+
+    def _update_row(self, row: int, rule: RoutingRule) -> None:
+        from textual.coordinate import Coordinate
+        table = self.query_one("#rules-table", DataTable)
+        for col, value in enumerate(self._rule_row(rule)):
+            table.update_cell_at(Coordinate(row, col), value)
+
+    def _focused_rule(self) -> Optional[tuple[int, RoutingRule]]:
+        table = self.query_one("#rules-table", DataTable)
+        idx = table.cursor_row
+        rules = self._all_rules()
+        if 0 <= idx < len(rules):
+            return idx, rules[idx]
+        return None
+
+    def _save_rule_list(self, rule: RoutingRule) -> None:
+        if rule.scope == RuleScope.GLOBAL:
+            self._settings.save()
+        # local rules are saved with the deck on deck save — no action needed here
+
+    def _remove_rule(self, rule: RoutingRule) -> None:
+        if rule.scope == RuleScope.GLOBAL:
+            self._settings.routes = [r for r in self._settings.routes if r is not rule]
+            self._settings.save()
+        elif self._deck is not None:
+            self._deck.local_routes = [r for r in self._deck.local_routes if r is not rule]
+
+    def _append_rule(self, rule: RoutingRule) -> None:
+        if rule.scope == RuleScope.GLOBAL:
+            self._settings.routes.append(rule)
+            self._settings.save()
+        elif self._deck is not None:
+            self._deck.local_routes.append(rule)
+
+    # ── event handlers ─────────────────────────────────────────────────────────
 
     def on_switch_changed(self, event: Switch.Changed) -> None:
         field_name = event.switch.id
         if field_name and hasattr(self._settings, field_name):
             setattr(self._settings, field_name, event.value)
             self._settings.save()
+
+    def on_data_table_cell_selected(self, event: DataTable.CellSelected) -> None:
+        col = event.coordinate.column
+        result = self._focused_rule()
+        if result is None:
+            return
+        _, rule = result
+        if col == 2:  # Enabled
+            rule.enabled = not rule.enabled
+            self._save_rule_list(rule)
+            self._rebuild_table()
+        elif col == 3:  # Scope
+            if self._deck is None:
+                return
+            self._remove_rule(rule)
+            rule.scope = RuleScope.LOCAL if rule.scope == RuleScope.GLOBAL else RuleScope.GLOBAL
+            self._append_rule(rule)
+            self._rebuild_table()
+        elif col == 0:  # Group
+            self.app.push_screen(_RuleEditModal("Group name", rule.group),
+                                  lambda v: self._apply_cell_edit(rule, "group", v))
+        elif col == 1:  # Query
+            self.app.push_screen(_RuleEditModal("Query", rule.query),
+                                  lambda v: self._apply_cell_edit(rule, "query", v))
+
+    def _apply_cell_edit(self, rule: RoutingRule, field: str, value: Optional[str]) -> None:
+        if value is None:
+            return
+        setattr(rule, field, value)
+        self._save_rule_list(rule)
+        self._rebuild_table()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn-reset":
+            from settings import _DEFAULT_ROUTES
+            self._settings.routes = list(_DEFAULT_ROUTES)
+            self._settings.save()
+            self._rebuild_table()
+        elif event.button.id == "btn-apply":
+            self.post_message(self.ApplyRoutesRequested())
+
+    def action_new_rule(self) -> None:
+        scope = RuleScope.GLOBAL
+        rule = RoutingRule(query="", group="", scope=scope)
+        self._append_rule(rule)
+        self._rebuild_table()
+        # move cursor to the new row, group column
+        table = self.query_one("#rules-table", DataTable)
+        table.move_cursor(row=table.row_count - 1, column=0)
+        table.focus()
+        self.app.push_screen(_RuleEditModal("Group name", ""),
+                              lambda v: self._apply_cell_edit(rule, "group", v))
+
+    def action_delete_rule(self) -> None:
+        result = self._focused_rule()
+        if result is None:
+            return
+        _, rule = result
+        self._remove_rule(rule)
+        self._rebuild_table()
 
     def action_dismiss_screen(self) -> None:
         self.dismiss(None)

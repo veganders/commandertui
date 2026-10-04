@@ -264,6 +264,15 @@ class CardDB:
 
         return list(results)
 
+    def matches(self, card: "Card", node: "QueryNode") -> bool:
+        """Return True if *card* satisfies *node* (no card-pool filter applied)."""
+        return _eval_node(
+            node, card,
+            self.tags.get(card.oracle_id, []),
+            self.tags_norm.get(card.oracle_id, frozenset()),
+            self.card_type_tokens.get(card.oracle_id, frozenset()),
+        )
+
     def query(self, node: "QueryNode") -> list[Card]:
         """Evaluate a parsed AST against all cards and return matches.
 

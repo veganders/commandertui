@@ -23,12 +23,12 @@ from deck_io import list_decks, load_deck, save_deck
 from models import MAYBEBOARD, CardEntry, CardRole, Deck, Group
 from partner import partner_mode, partner_filter
 from color_scout import ColorScoutScreen
-from search import MODE_COMMANDER, MODE_GROUP, MODE_PARTNER, SearchScreen
+from search import MODE_COMMANDER, MODE_GROUP, MODE_PARTNER, SearchScreen, apply_routing_rules
 from similar import SimilarCardsScreen
 from settings import Settings
 from grouping import CardGrouper, GroupInfo, MVGrouper, NamedGrouper, TagGrouper, TypeGrouper
 from sorting import CardSorter, MVSorter, NameSorter, PriceSorter
-from widgets import CardDetail, CardGroupEditorScreen, DeckNameModal, ExportModal, FilterSuggestions, GroupNameModal, ImportUrlModal, OpenDeckScreen, QueryInput, SettingsScreen, TopBar, WrappingFooter, build_filter_candidates
+from widgets import CardDetail, CardGroupEditorScreen, DeckNameModal, ExportModal, FilterSuggestions, GroupNameModal, ImportUrlModal, OpenDeckScreen, QueryInput, SettingsScreen, TopBar, UnsavedChangesModal, UnsavedChoice, WrappingFooter, build_filter_candidates
 
 _EXPORTERS = [ArchidektExporter(), ClipboardExporter()]
 _IMPORTERS: list[DeckImporter] = [ArchidektImporter()]
@@ -122,7 +122,46 @@ class MainScreen(Screen):
         self._deck_suggestions = FilterSuggestions(self, "#deck-search", "#deck-suggest", self._filter_candidates)
 
     def action_quit(self) -> None:
-        self.app.exit()
+        self._guard_unsaved(self.app.exit)
+
+    def _mark_dirty(self) -> None:
+        self._deck.dirty = True
+
+    def _clear_dirty(self) -> None:
+        self._deck.dirty = False
+
+    def _guard_unsaved(self, proceed: Callable) -> None:
+        if not self._deck.dirty:
+            proceed()
+            return
+        def on_choice(choice: UnsavedChoice) -> None:
+            if choice == UnsavedChoice.CANCEL:
+                return
+            if choice == UnsavedChoice.SAVE:
+                self._save_then(proceed)
+            else:
+                proceed()
+        self.app.push_screen(UnsavedChangesModal(), callback=on_choice)
+
+    def _save_then(self, proceed: Callable) -> None:
+        if self._deck.name:
+            path = save_deck(self._deck)
+            self._deck.save_path = path
+            self._clear_dirty()
+            self.notify(f"Saved: {path.name}")
+            proceed()
+        else:
+            def on_name(name: Optional[str]) -> None:
+                if not name:
+                    return
+                self._deck.name = name
+                path = save_deck(self._deck)
+                self._deck.save_path = path
+                self._clear_dirty()
+                self.query_one(TopBar).refresh_display()
+                self.notify(f"Saved: {path.name}")
+                proceed()
+            self.app.push_screen(DeckNameModal(), callback=on_name)
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id != "deck-search" or self._deck_suggestions is None:
@@ -275,11 +314,7 @@ class MainScreen(Screen):
             )
 
     def on_card_detail_printing_selected(self, msg: CardDetail.PrintingSelected) -> None:
-        entry = self._deck.get_entry_for_card(msg.oracle_id)
-        if entry is not None:
-            entry.printing_idx = msg.printing_idx
-        else:
-            self._deck.selected_printings[msg.oracle_id] = msg.printing_idx
+        self._deck.set_entry_printing(msg.oracle_id, msg.printing_idx)
         self.query_one(TopBar).refresh_display()
 
     # ── search ─────────────────────────────────────────────────────────────────
@@ -316,7 +351,7 @@ class MainScreen(Screen):
     def action_create_group(self) -> None:
         def on_name(name: Optional[str]) -> None:
             if name:
-                self._deck.groups.append(Group(name=name))
+                self._deck.add_group(name)
                 self._rebuild_tree()
         self.app.push_screen(GroupNameModal(), callback=on_name)
 
@@ -349,10 +384,10 @@ class MainScreen(Screen):
             self._deck.remove_all(node.data.oracle_id)
         elif isinstance(node.data, Group):
             group = node.data
-            for entry in self._deck.entries_for_group(group.name):
-                entry.leave_group(group.name)
-            if not group.permanent:
-                self._deck.groups.remove(group)
+            if group.permanent:
+                self._deck.clear_group_memberships(group.name)
+            else:
+                self._deck.remove_group(group)
         else:
             return
         self._rebuild_tree()
@@ -391,13 +426,14 @@ class MainScreen(Screen):
         node = self.query_one("#groups", Tree).cursor_node
         if node is None or not isinstance(node.data, Card):
             return
-        entry = self._deck.get_entry(node.data.oracle_id)
+        oracle_id = node.data.oracle_id
+        entry = self._deck.get_entry(oracle_id)
         if entry is None:
             return
         if entry.is_maybe():
-            entry.leave_group(MAYBEBOARD)
+            self._deck.entry_leave_group(oracle_id, MAYBEBOARD)
         else:
-            entry.join_group(MAYBEBOARD)
+            self._deck.entry_join_group(oracle_id, MAYBEBOARD)
         self._rebuild_tree()
         self.query_one(TopBar).refresh_display()
 
@@ -414,16 +450,20 @@ class MainScreen(Screen):
         self.app.push_screen(ExportModal(_EXPORTERS), callback=on_exporter)
 
     def action_new_deck(self) -> None:
-        self._deck.__dict__.update(_fresh_deck().__dict__)
-        self._current_card = None
-        self._rebuild_tree()
-        self.query_one(TopBar).refresh_display()
-        self.query_one(CardDetail).show_card(None, self._db, self._deck, self._settings)
+        def proceed() -> None:
+            self._deck.__dict__.update(_fresh_deck().__dict__)
+            self._clear_dirty()
+            self._current_card = None
+            self._rebuild_tree()
+            self.query_one(TopBar).refresh_display()
+            self.query_one(CardDetail).show_card(None, self._db, self._deck, self._settings)
+        self._guard_unsaved(proceed)
 
     def action_save_deck(self) -> None:
         if self._deck.name:
             path = save_deck(self._deck)
             self._deck.save_path = path
+            self._clear_dirty()
             self.notify(f"Saved: {path.name}")
         else:
             def on_name(name: str | None) -> None:
@@ -432,6 +472,7 @@ class MainScreen(Screen):
                 self._deck.name = name
                 path = save_deck(self._deck)
                 self._deck.save_path = path
+                self._clear_dirty()
                 self.query_one(TopBar).refresh_display()
                 self.notify(f"Saved: {path.name}")
             self.app.push_screen(DeckNameModal(), callback=on_name)
@@ -441,35 +482,39 @@ class MainScreen(Screen):
             if not name:
                 return
             self._deck.name = name
-            self._deck.save_path = None          # clear so save_deck generates a fresh path
+            self._deck.save_path = None
             path = save_deck(self._deck)
             self._deck.save_path = path
+            self._clear_dirty()
             self.query_one(TopBar).refresh_display()
             self.notify(f"Saved: {path.name}")
         self.app.push_screen(DeckNameModal(current_name=self._deck.name), callback=on_name)
 
     def action_open_deck(self) -> None:
-        paths = list_decks()
-        if not paths:
-            self.notify("No saved decks found.", severity="warning")
-            return
-
-        def on_path(path) -> None:
-            if path is None:
+        def proceed() -> None:
+            paths = list_decks()
+            if not paths:
+                self.notify("No saved decks found.", severity="warning")
                 return
-            self._deck.__dict__.update(load_deck(path, self._db).__dict__)
-            _ensure_permanent_groups(self._deck)
-            self._rebuild_tree()
-            self.query_one(TopBar).refresh_display()
-            self.notify(f"Opened: {self._deck.name or path.stem}")
-
-        self.app.push_screen(OpenDeckScreen(paths), callback=on_path)
+            def on_path(path) -> None:
+                if path is None:
+                    return
+                self._deck.__dict__.update(load_deck(path, self._db).__dict__)
+                _ensure_permanent_groups(self._deck)
+                self._clear_dirty()
+                self._rebuild_tree()
+                self.query_one(TopBar).refresh_display()
+                self.notify(f"Opened: {self._deck.name or path.stem}")
+            self.app.push_screen(OpenDeckScreen(paths), callback=on_path)
+        self._guard_unsaved(proceed)
 
     def action_import_deck(self) -> None:
-        def on_url(url: Optional[str]) -> None:
-            if url:
-                self._run_import(url)
-        self.app.push_screen(ImportUrlModal(), callback=on_url)
+        def proceed() -> None:
+            def on_url(url: Optional[str]) -> None:
+                if url:
+                    self._run_import(url)
+            self.app.push_screen(ImportUrlModal(), callback=on_url)
+        self._guard_unsaved(proceed)
 
     @work(exit_on_error=False)
     async def _run_import(self, url: str) -> None:
@@ -482,6 +527,7 @@ class MainScreen(Screen):
             deck, skipped = await importer.import_deck(url, self._db)
             self._deck.__dict__.update(deck.__dict__)
             _ensure_permanent_groups(self._deck)
+            self._clear_dirty()
             self._rebuild_tree()
             self.query_one(TopBar).refresh_display()
             msg = f"Imported: {self._deck.name}"
@@ -520,7 +566,7 @@ class MainScreen(Screen):
         )
 
     def action_open_settings(self) -> None:
-        self.app.push_screen(SettingsScreen(self._settings))
+        self.app.push_screen(SettingsScreen(self._settings, self._deck))
 
     def action_search_partner(self) -> None:
         commander = self._deck.commander
@@ -531,7 +577,7 @@ class MainScreen(Screen):
             return
 
         if self._deck.partner is not None:
-            self._deck.partner = None
+            self._deck.set_partner(None)
             self.query_one(TopBar).refresh_display()
             return
 
@@ -540,7 +586,7 @@ class MainScreen(Screen):
             results = self._db.search(name=name)
             card = next((c for c in results if c.name == name), None)
             if card:
-                self._deck.partner = CardEntry(card=card, role=CardRole.PARTNER)
+                self._deck.set_partner(CardEntry(card=card, role=CardRole.PARTNER))
                 self.query_one(TopBar).refresh_display()
             else:
                 self.notify(f"Partner not found in database: {name}", severity="warning")
@@ -618,6 +664,12 @@ class DeckbuilderApp(App):
 
     def on_mount(self) -> None:
         self.push_screen(MainScreen(self._db, self._deck, self._settings))
+
+    def on_settings_screen_apply_routes_requested(self, _: SettingsScreen.ApplyRoutesRequested) -> None:
+        main = next(s for s in self.screen_stack if isinstance(s, MainScreen))
+        apply_routing_rules(main._deck, main._db)
+        main._rebuild_tree()
+        main.notify("Routing rules applied to current deck")
 
 
 def _fresh_deck() -> Deck:

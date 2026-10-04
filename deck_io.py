@@ -8,6 +8,7 @@ from pathlib import Path
 
 from db import CardDB
 from models import CardEntry, CardRole, Deck, Group
+from settings import RoutingRule, RuleScope
 
 DECKS_DIR = Path(__file__).parent / "data" / "decks"
 
@@ -45,6 +46,10 @@ def save_deck(deck: Deck) -> Path:
     data: dict = {
         "name": deck.name,
         "groups": [{"name": g.name, "permanent": g.permanent} for g in deck.groups],
+        "local_routes": [
+            {"query": r.query, "group": r.group, "enabled": r.enabled}
+            for r in deck.local_routes
+        ],
         "commander": None,
         "partner": None,
         "cards": [],
@@ -94,6 +99,13 @@ def load_deck(path: Path, db: CardDB) -> Deck:
         for g in data.get("groups", [])
     ]
     deck = Deck(name=data.get("name"), save_path=path, groups=groups)
+    deck.local_routes = [
+        RoutingRule(
+            query=r["query"], group=r["group"],
+            enabled=r.get("enabled", True), scope=RuleScope.LOCAL,
+        )
+        for r in data.get("local_routes", [])
+    ]
 
     cmd_data = data.get("commander")
     if cmd_data:

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Optional
 
 from db import Card
+from settings import RoutingRule
 
 MAYBEBOARD = "Maybeboard"
 
@@ -107,12 +108,57 @@ class Deck:
     groups: GroupList = field(default_factory=GroupList)
     entries: dict[str, CardEntry] = field(default_factory=dict)  # oracle_id → CardEntry
     selected_printings: dict[str, int] = field(default_factory=dict)  # cache for non-deck cards
+    local_routes: list[RoutingRule] = field(default_factory=list)
     name: Optional[str] = None
     save_path: Optional[Path] = None
+    dirty: bool = field(default=False, init=False)
 
     def __post_init__(self) -> None:
         if not isinstance(self.groups, GroupList):
             self.groups = GroupList(self.groups)
+
+    def set_commander(self, entry: Optional[CardEntry]) -> None:
+        self.commander = entry
+        self.dirty = True
+
+    def set_partner(self, entry: Optional[CardEntry]) -> None:
+        self.partner = entry
+        self.dirty = True
+
+    def add_group(self, name: str) -> Group:
+        group = Group(name=name)
+        self.groups.append(group)
+        self.dirty = True
+        return group
+
+    def clear_group_memberships(self, group_name: str) -> None:
+        for entry in self.entries_for_group(group_name):
+            entry.leave_group(group_name)
+        self.dirty = True
+
+    def remove_group(self, group: Group) -> None:
+        self.clear_group_memberships(group.name)
+        self.groups.remove(group)
+
+    def entry_join_group(self, oracle_id: str, group_name: str) -> None:
+        entry = self.get_entry(oracle_id)
+        if entry is not None:
+            entry.join_group(group_name)
+            self.dirty = True
+
+    def entry_leave_group(self, oracle_id: str, group_name: str) -> None:
+        entry = self.get_entry(oracle_id)
+        if entry is not None:
+            entry.leave_group(group_name)
+            self.dirty = True
+
+    def set_entry_printing(self, oracle_id: str, idx: int) -> None:
+        entry = self.get_entry_for_card(oracle_id)
+        if entry is not None:
+            entry.printing_idx = idx
+            self.dirty = True
+        else:
+            self.selected_printings[oracle_id] = idx
 
     def get_entry_for_card(self, oracle_id: str) -> Optional[CardEntry]:
         """Find any entry (commander, partner, or main) by oracle_id."""
@@ -139,6 +185,7 @@ class Deck:
             self.entries[card.oracle_id].count += 1
         else:
             self.entries[card.oracle_id] = self.make_entry(card)
+        self.dirty = True
 
     def remove_one(self, oracle_id: str) -> None:
         """Decrement count; removes entry (and all group memberships) when count hits 0."""
@@ -148,9 +195,11 @@ class Deck:
         entry.count -= 1
         if entry.count <= 0:
             del self.entries[oracle_id]
+        self.dirty = True
 
     def remove_all(self, oracle_id: str) -> None:
         self.entries.pop(oracle_id, None)
+        self.dirty = True
 
     def entries_for_group(self, group_name: str) -> list[CardEntry]:
         return [e for e in self.entries.values() if group_name in e.groups]

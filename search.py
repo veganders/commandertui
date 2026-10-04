@@ -21,33 +21,49 @@ MODE_COMMANDER = "commander"
 MODE_PARTNER = "partner"
 MODE_GROUP = "group"
 
-# tag → group name (case-insensitive); extend here to add more auto-routing rules
-_TAG_ROUTES: list[tuple[str, str]] = [
-    ("ramp", "ramp"),
-    ("draw", "draw"),
-    ("removal", "interaction"),
-]
-
-
 def route_groups(card: Card, deck: Deck, db: CardDB) -> list[Group]:
-    """Return groups the card should auto-route into based on type-line and oracle tags.
+    """Return groups the card should be placed in according to active routing rules.
 
-    Lands go to "Lands" (type-line check). Tagged cards route by _TAG_ROUTES.
-    Returns only groups that actually exist in deck.groups.
+    Rules come from db.settings.routes (global) and deck.local_routes (local).
+    Missing groups are created in deck on the fly.
     """
+    rules = [r for r in db.settings.routes if r.enabled]
+    rules += [r for r in deck.local_routes if r.enabled]
+
     name_map = {g.name.lower(): g for g in deck.groups}
-    tags = {t.lower() for t in db.get_tags(card.oracle_id)}
     targets: list[Group] = []
 
-    if any("land" in f.type_line for f in card.faces):
-        if "lands" in name_map:
-            targets.append(name_map["lands"])
-
-    for tag, group_name in _TAG_ROUTES:
-        if tag in tags and group_name in name_map:
-            targets.append(name_map[group_name])
+    for rule in rules:
+        try:
+            node = parse_query(rule.query)
+        except Exception:
+            continue
+        if not db.matches(card, node):
+            continue
+        gname_lower = rule.group.lower()
+        if gname_lower not in name_map:
+            new_group = Group(name=rule.group)
+            deck.groups.append(new_group)
+            name_map[gname_lower] = new_group
+        g = name_map[gname_lower]
+        if g not in targets:
+            targets.append(g)
 
     return targets
+
+
+def apply_routing_rules(deck: Deck, db: CardDB) -> None:
+    """Retroactively apply all active routing rules to every card in deck.
+
+    Only adds memberships — never removes existing ones.
+    """
+    all_entries = list(deck.entries.values())
+    for role_entry in (deck.commander, deck.partner):
+        if role_entry:
+            all_entries.append(role_entry)
+    for entry in all_entries:
+        for group in route_groups(entry.card, deck, db):
+            entry.join_group(group.name)
 
 
 class CardListScreen(Screen):
@@ -419,20 +435,20 @@ class SearchScreen(CardListScreen):
             else:
                 new_cmd = self._deck.make_entry(card, CardRole.COMMANDER)
                 self._maybe_prompt_color_choice(new_cmd, lambda: self._deck.commander)
-            self._deck.commander = new_cmd
+            self._deck.set_commander(new_cmd)
             if self._deck.partner is not None:
                 info = partner_mode(new_cmd.card) if new_cmd else None
                 if info is None or not partner_filter(info)(self._deck.partner.card):
-                    self._deck.partner = None
+                    self._deck.set_partner(None)
         elif self._mode == MODE_PARTNER:
             if self._deck.partner:
                 changed.add(self._deck.partner.card.oracle_id)
             if self._deck.partner and self._deck.partner.card.oracle_id == card.oracle_id:
-                self._deck.partner = None
+                self._deck.set_partner(None)
             else:
                 new_partner = self._deck.make_entry(card, CardRole.PARTNER)
                 self._maybe_prompt_color_choice(new_partner, lambda: self._deck.partner)
-                self._deck.partner = new_partner
+                self._deck.set_partner(new_partner)
         elif self._mode == MODE_GROUP:
             if self._deck.count_of(card.oracle_id) > 0:
                 self._deck.remove_all(card.oracle_id)
