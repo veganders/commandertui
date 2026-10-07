@@ -398,10 +398,7 @@ class SearchScreen(CardListScreen):
         if self._mode == MODE_COMMANDER:
             results = [
                 c for c in results
-                if (
-                    c.has_type("legendary")
-                    and (c.has_type("creature") or c.has_type("planeswalker"))
-                )
+                if (c.has_type("legendary") and c.has_type("creature"))
                 or c.has_oracle("can be your commander")
             ]
         elif self._mode == MODE_PARTNER and self._post_filter is not None:
