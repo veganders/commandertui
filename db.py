@@ -340,6 +340,43 @@ _CMP_OPS: dict = {
     '=': float.__eq__, '<': float.__lt__, '>': float.__gt__,
     '<=': float.__le__, '>=': float.__ge__,
 }
+_MANA_TOKEN_RE = re.compile(r'\{([^}]+)\}|(\d+)|([a-zA-Z])')
+
+
+def _normalize_mana_sym(sym: str) -> str:
+    """Canonical form for a mana symbol (no braces).
+
+    Slash-separated components are sorted so {G/W} == {W/G} == G/W.
+    """
+    sym = sym.upper()
+    if '/' in sym:
+        return '/'.join(sorted(sym.split('/')))
+    return sym
+
+
+def _parse_mana_symbols(text: str) -> dict[str, int]:
+    """Parse a mana cost or mana query into {symbol: count}.
+
+    Bracketed symbols like {R/P} or {W/U} are normalised via
+    _normalize_mana_sym so order within a hybrid symbol doesn't matter.
+    Numeric symbols (including bare digits) accumulate into 'generic'.
+    Bare letters are equivalent to their single-letter bracketed form.
+    """
+    counts: dict[str, int] = {}
+    for m in _MANA_TOKEN_RE.finditer(text):
+        bracket, number, letter = m.groups()
+        if bracket is not None:
+            try:
+                counts["generic"] = counts.get("generic", 0) + int(bracket)
+            except ValueError:
+                sym = _normalize_mana_sym(bracket)
+                counts[sym] = counts.get(sym, 0) + 1
+        elif number is not None:
+            counts["generic"] = counts.get("generic", 0) + int(number)
+        else:
+            sym = letter.upper()
+            counts[sym] = counts.get(sym, 0) + 1
+    return counts
 
 
 def _skip_delimited(s: str, i: int, delim: str) -> int:
@@ -639,6 +676,17 @@ def _eval_atom(atom: Atom, card: Card, tags: list[str], tags_norm: frozenset[str
         case 'is':
             pred = _IS_PREDICATES.get(value.lower())
             return pred(card) if pred is not None else False
+        case 'm' | 'mana':
+            query_syms = _parse_mana_symbols(value)
+            if not query_syms:
+                return False
+            for face in card.faces:
+                if not face.mana_cost:
+                    continue
+                face_syms = _parse_mana_symbols(face.mana_cost)
+                if all(face_syms.get(sym, 0) >= count for sym, count in query_syms.items()):
+                    return True
+            return False
         case _:
             return value.lower() in card.name.lower()
 

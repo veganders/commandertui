@@ -12,6 +12,7 @@
 | `id:wubrg` | color identity is a **subset** of the given colors; `id:c` means colorless (Scryfall-consistent — `C` is filtered out of WUBRG, leaving an empty set that only colorless cards satisfy) |
 | `id=ur` | color identity is **exactly** the given colors; `id=c` means exactly colorless |
 | `c:rg` | card colors include **at least** red and green |
+| `m:2xww` | mana cost contains **at least** the given symbols: digits = generic mana, letters = pips (`m:xw` finds X+W spells). Complex symbols need braces: `m:{r/p}`, `m:{g/w}`. Component order inside braces doesn't matter (`{g/w}` == `{w/g}`). |
 | `otag:ramp` | oracle tag match (matches ancestors); spaces and hyphens are ignored, so `otag:manadork` and `otag:mana-dork` both match `mana dork` |
 | `kw:partner` | keyword match; stored lowercase so the check is case-insensitive in practice |
 | `r:rare` | exact rarity |
