@@ -155,8 +155,9 @@ class Deck:
     def set_entry_printing(self, oracle_id: str, idx: int) -> None:
         entry = self.get_entry_for_card(oracle_id)
         if entry is not None:
-            entry.printing_idx = idx
-            self.dirty = True
+            if entry.printing_idx != idx:
+                entry.printing_idx = idx
+                self.dirty = True
         else:
             self.selected_printings[oracle_id] = idx
 

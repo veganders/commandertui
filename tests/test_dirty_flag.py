@@ -131,11 +131,19 @@ class TestDirtyOnDeck:
 
     def test_set_entry_printing_marks_dirty(self, db):
         deck = Deck()
+        card = next(c for c in db.cards.values() if len(c.printings) >= 2)
+        deck.add(card)
+        deck.dirty = False
+        deck.set_entry_printing(card.oracle_id, 1)  # change from default 0
+        assert deck.dirty is True
+
+    def test_set_entry_printing_same_value_does_not_mark_dirty(self, db):
+        deck = Deck()
         card = next(c for c in db.cards.values() if c.printings)
         deck.add(card)
         deck.dirty = False
-        deck.set_entry_printing(card.oracle_id, 0)
-        assert deck.dirty is True
+        deck.set_entry_printing(card.oracle_id, 0)  # already 0 — no change
+        assert deck.dirty is False
 
     def test_set_entry_printing_non_deck_card_does_not_mark_dirty(self, db):
         deck = Deck()
