@@ -334,13 +334,98 @@ class AtLeastN:
 
 QueryNode = Union[Atom, And, Or, Not, AtLeastN]
 
-_FILTER_CMP_RE = re.compile(r'^(mv|eur|usd|tix|power|toughness|id)([<>]=?|=)(.+)$', re.IGNORECASE)
+_FILTER_CMP_RE = re.compile(r'^(mv|eur|usd|tix|power|toughness|loyalty|id)([<>]=?|=)(.+)$', re.IGNORECASE)
 _VALUE_CMP_RE = re.compile(r'^([<>]=?|=)(.+)$')
 _CMP_OPS: dict = {
     '=': float.__eq__, '<': float.__lt__, '>': float.__gt__,
     '<=': float.__le__, '>=': float.__ge__,
 }
 _MANA_TOKEN_RE = re.compile(r'\{([^}]+)\}|(\d+)|([a-zA-Z])')
+
+_LAMBDA_VARS = frozenset({'power', 'toughness', 'mv', 'loyalty'})
+_LAMBDA_SPLIT_RE = re.compile(r'^(.*?)(>=|<=|>|<|=)(.*)$')
+
+
+def _stat_to_float(val: str | None) -> float | None:
+    if val is None:
+        return None
+    try:
+        return float(val)
+    except ValueError:
+        return 0.0  # non-numeric (e.g. "*") counts as 0
+
+
+def _parse_lambda_tokens(text: str) -> list:
+    tokens: list = []
+    i = 0
+    while i < len(text):
+        if text[i].isspace():
+            i += 1
+            continue
+        matched = False
+        for var in sorted(_LAMBDA_VARS, key=len, reverse=True):
+            if text[i:i + len(var)] == var:
+                tokens.append(var)
+                i += len(var)
+                matched = True
+                break
+        if matched:
+            continue
+        if text[i].isdigit():
+            j = i + 1
+            while j < len(text) and text[j].isdigit():
+                j += 1
+            tokens.append(float(text[i:j]))
+            i = j
+        elif text[i] in '+-*/()':
+            tokens.append(text[i])
+            i += 1
+        else:
+            raise ValueError(f"Unexpected character: {text[i]!r}")
+    return tokens
+
+
+def _eval_lambda_expr(tokens: list, variables: dict[str, float]) -> float:
+    pos = [0]
+
+    def peek():
+        return tokens[pos[0]] if pos[0] < len(tokens) else None
+
+    def consume():
+        tok = tokens[pos[0]]
+        pos[0] += 1
+        return tok
+
+    def factor() -> float:
+        tok = peek()
+        if tok == '(':
+            consume()
+            val = expr()
+            consume()  # ')'
+            return val
+        if isinstance(tok, float):
+            return consume()
+        if tok in variables:
+            return variables[consume()]
+        raise ValueError(f"Unexpected token: {tok!r}")
+
+    def term() -> float:
+        left = factor()
+        while peek() in ('*', '/'):
+            op = consume()
+            right = factor()
+            left = left * right if op == '*' else left / right
+        return left
+
+    def expr() -> float:
+        left = term()
+        while peek() in ('+', '-'):
+            op = consume()
+            right = term()
+            left = left + right if op == '+' else left - right
+        return left
+
+    return expr()
 
 
 def _normalize_mana_sym(sym: str) -> str:
@@ -612,7 +697,7 @@ def _eval_atom(atom: Atom, card: Card, tags: list[str], tags_norm: frozenset[str
         case 'o' | 'oracle':
             if value.startswith('/') and value.endswith('/') and len(value) >= 2:
                 try:
-                    pat = re.compile(value[1:-1], re.IGNORECASE)
+                    pat = re.compile(value[1:-1], re.IGNORECASE | re.MULTILINE)
                     return any(pat.search(f.oracle_text) for f in card.faces)
                 except re.error:
                     return False
@@ -644,7 +729,7 @@ def _eval_atom(atom: Atom, card: Card, tags: list[str], tags_norm: frozenset[str
                 return _CMP_OPS.get(op, float.__eq__)(card.cmc, float(num))
             except ValueError:
                 return False
-        case 'power' | 'toughness':
+        case 'power' | 'toughness' | 'loyalty':
             m = _VALUE_CMP_RE.match(value)
             op, num = (m.group(1), m.group(2)) if m else ('=', value)
             try:
@@ -653,7 +738,12 @@ def _eval_atom(atom: Atom, card: Card, tags: list[str], tags_norm: frozenset[str
                 return False
             fn = _CMP_OPS.get(op, float.__eq__)
             for face in card.faces:
-                stat = face.power if key == 'power' else face.toughness
+                if key == 'power':
+                    stat = face.power
+                elif key == 'toughness':
+                    stat = face.toughness
+                else:
+                    stat = face.loyalty
                 if stat is None:
                     continue
                 try:
@@ -685,6 +775,37 @@ def _eval_atom(atom: Atom, card: Card, tags: list[str], tags_norm: frozenset[str
                     continue
                 face_syms = _parse_mana_symbols(face.mana_cost)
                 if all(face_syms.get(sym, 0) >= count for sym, count in query_syms.items()):
+                    return True
+            return False
+        case 'lambda' | 'l':
+            split = _LAMBDA_SPLIT_RE.match(value)
+            if not split:
+                return False
+            lhs_text, op, rhs_text = split.group(1).strip(), split.group(2), split.group(3).strip()
+            cmp_fn = _CMP_OPS.get(op, float.__eq__)
+            try:
+                lhs_toks = _parse_lambda_tokens(lhs_text)
+                rhs_toks = _parse_lambda_tokens(rhs_text)
+            except ValueError:
+                return False
+            referenced = {t for t in lhs_toks + rhs_toks if isinstance(t, str)}
+            per_face_vars = referenced & {'power', 'toughness', 'loyalty'}
+            for face in card.faces:
+                face_stats = {
+                    'power':     _stat_to_float(face.power),
+                    'toughness': _stat_to_float(face.toughness),
+                    'loyalty':   _stat_to_float(face.loyalty),
+                }
+                if any(face_stats[v] is None for v in per_face_vars):
+                    continue
+                vars_: dict[str, float] = {'mv': card.cmc}
+                vars_.update({k: v for k, v in face_stats.items() if v is not None})
+                try:
+                    lhs_val = _eval_lambda_expr(lhs_toks, vars_)
+                    rhs_val = _eval_lambda_expr(rhs_toks, vars_)
+                except (ValueError, ZeroDivisionError, KeyError):
+                    continue
+                if cmp_fn(lhs_val, rhs_val):
                     return True
             return False
         case _:
@@ -720,7 +841,7 @@ def _validate_atom(atom: Atom) -> bool:
         v = atom.value
         if v.startswith('/') and v.endswith('/') and len(v) >= 2:
             try:
-                re.compile(v[1:-1], re.IGNORECASE)
+                re.compile(v[1:-1], re.IGNORECASE | re.MULTILINE)
             except re.error:
                 return False
     return True

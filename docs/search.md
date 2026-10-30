@@ -18,6 +18,8 @@
 | `r:rare` | exact rarity |
 | `mv>=3` | mana value comparison (`=` `<` `>` `<=` `>=`) |
 | `power>=3` / `toughness<=5` | power/toughness comparison; `:` means `=`. Non-numeric values (e.g. `*`) count as 0, consistent with Scryfall. |
+| `loyalty>=3` | starting loyalty comparison; same semantics as power/toughness |
+| `lambda:power-mv>=3` | arithmetic expression over `power`, `toughness`, `mv`, `loyalty`; operators `+` `-` `*` `/` and `()`; integer literals only; matches if any face satisfies; `*` counts as 0; faces where a referenced stat is absent are skipped. Short alias: `l:` |
 | `eur<=1` / `usd>=5` / `tix=0` | price comparison against cheapest printing |
 | `-t:creature` | negate any filter |
 | `AND` / `OR` / `( )` | explicit boolean; AND has higher precedence than OR |
