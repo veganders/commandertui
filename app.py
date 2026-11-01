@@ -381,7 +381,14 @@ class MainScreen(Screen):
         if node is None:
             return
         if isinstance(node.data, Card):
-            self._deck.remove_all(node.data.oracle_id)
+            oracle_id = node.data.oracle_id
+            if self._deck.commander and self._deck.commander.card.oracle_id == oracle_id:
+                self._deck.set_commander(None)
+                self._deck.set_partner(None)
+            elif self._deck.partner and self._deck.partner.card.oracle_id == oracle_id:
+                self._deck.set_partner(None)
+            else:
+                self._deck.remove_all(oracle_id)
         elif isinstance(node.data, Group):
             group = node.data
             if group.permanent:
