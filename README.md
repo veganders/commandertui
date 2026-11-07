@@ -51,7 +51,7 @@ python app.py
 | `p` | Set partner / background |
 | `s` | Search cards |
 | `f` | Find similar cards to the focused card |
-| `x` | Color Scout — explore card counts by color identity |
+| `h` | Histogram — explore card counts by color identity, subtype, or oracle tag |
 | `g` | New group |
 | `d` | Remove card / group |
 | `e` | Edit card groups and count |

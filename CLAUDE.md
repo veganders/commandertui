@@ -99,7 +99,7 @@ When such a card is set as commander or partner, `SearchScreen._maybe_prompt_col
 | `ctrl+u` | Import deck from Archidekt (prompts for URL or deck ID) |
 | `+` | Increment copy count for the focused card (only if `card.allows_multiple()`) |
 | `-` | Decrement copy count for the focused card |
-| `x` | Open Color Scout (explore card counts by color identity) |
+| `h` | Open Histogram (explore card counts by color identity, subtype, or oracle tag) |
 | `?` | Open Settings (card pool filters, currency) |
 | `q` | Quit |
 

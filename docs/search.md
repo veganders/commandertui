@@ -68,7 +68,7 @@ When the user types a supported filter prefix (`otag:`, `t:`, `kw:`) in the sear
 
 - **`_filter_token_context(value, pos, prefixes) -> tuple[int, int, str, str] | None`** — scans left from cursor to find the current token, checks for any of the given prefixes (with optional leading `-`), handles quoted and unquoted forms. Returns `(token_start, token_end, partial, matched_prefix)` or `None` if not in a matching token or the token is already complete (closing `"` present).
 
-- **`FilterSuggestions`** — manages a dropdown for a `QueryInput` + `ListView` pair. Takes `candidates: dict[str, list[str]]` mapping each prefix to its completion list. Core methods: `update(value, pos)` detects the active prefix and filters candidates; `apply(value, callback)` replaces the token, appends a trailing space if the character after the replaced range isn't already one (prevents the dropdown from immediately reopening), and optionally calls back with the new query; `navigate(direction)` handles Tab/Shift+Tab cycling; `current_value()` returns the highlighted entry. Convenience handler methods — call these from screen `on_*` methods to share logic without duplication: `handle_input_changed(event)`, `handle_debounced(event, callback)`, `handle_key(event, callback)` (returns True if consumed), `handle_list_selected(event, callback)` (returns True if consumed). Used by `SearchScreen` (`#srch-suggest`), `ColorScoutScreen` (`#cs-suggest`), and `DeckbuilderApp` (`#deck-suggest`).
+- **`FilterSuggestions`** — manages a dropdown for a `QueryInput` + `ListView` pair. Takes `candidates: dict[str, list[str]]` mapping each prefix to its completion list. Core methods: `update(value, pos)` detects the active prefix and filters candidates; `apply(value, callback)` replaces the token, appends a trailing space if the character after the replaced range isn't already one (prevents the dropdown from immediately reopening), and optionally calls back with the new query; `navigate(direction)` handles Tab/Shift+Tab cycling; `current_value()` returns the highlighted entry. Convenience handler methods — call these from screen `on_*` methods to share logic without duplication: `handle_input_changed(event)`, `handle_debounced(event, callback)`, `handle_key(event, callback)` (returns True if consumed), `handle_list_selected(event, callback)` (returns True if consumed). Used by `SearchScreen` (`#srch-suggest`), `HistogramScreen` (`#cs-suggest`), and `DeckbuilderApp` (`#deck-suggest`).
 
 - **`build_filter_candidates(db) -> dict[str, list[str]]`** — builds all three candidate lists in one pass. **Call once per session** (in `DeckbuilderApp.on_mount`); store the result in `self._filter_candidates` and pass it to every `SearchScreen` via the `filter_candidates=` constructor argument. Candidate sources: `otag:` → ancestor-expanded tag labels; `t:` → `extract_type_words()` applied to every card's type line; `kw:` → all unique keyword strings.
 
@@ -121,12 +121,14 @@ Typed `Screen[str]`; dismisses with the current query string. `DeckbuilderApp` s
 
 Invalid filter syntax turns the input red (`query-error` class). The filter uses the full search syntax (mv, otag, eur, etc.).
 
-## Color Scout (`color_scout.py`)
+## Histogram (`histogram.py`)
 
-Opened with `x` from the main window. Enter a search query and see how many matching cards are playable in each of the 32 color identities (all subsets of WUBRG, plus colorless), sorted by count descending.
+Opened with `h` from the main window. Enter a search query and see how many matching cards fall into each bucket; cycle grouping dimensions with `G`.
 
-**Playable-within semantics**: a card is counted for an identity if `card.color_identity ⊆ identity`. This answers "if I build this identity, how many cards support my theme?"
+**Color Identity mode** (default): counts cards playable in each of the 32 color identities (all subsets of WUBRG, plus colorless). A card is counted for an identity if `card.color_identity ⊆ identity`. All 32 combinations are always shown (including zero-count). Enter on a row opens search with `id:{identity}`. `_ALL_IDENTITIES` and `_identity_str()` live in `histogram.py`.
 
-**Identity coverage**: all 32 combinations are always shown (including zero-count ones). Named identities: mono (W/U/B/R/G); guilds (Azorius WU, Dimir UB, Rakdos BR, Gruul RG, Selesnya WG, Orzhov WB, Izzet UR, Golgari BG, Boros WR, Simic UG); shards/wedges; four-color; Five-Color (WUBRG); Colorless (C).
+**Subtype mode**: counts how many cards share each subtype (everything after `—` in the type line). Only non-zero rows shown. Enter opens search with `t:{subtype}`.
 
-**Navigating to search**: pressing Enter on a row pushes `SearchScreen` in MODE_GROUP with `id:{identity} {query}` as the initial query. `_ALL_IDENTITIES` and `_identity_str()` live in `color_scout.py`. `_identity_str` returns letters in WUBRG order, or `"C"` for the empty set.
+**Oracle Tag mode**: counts cards by leaf oracle tag (directly assigned, not ancestor-expanded). Only non-zero rows. Enter opens search with `otag:{tag}`.
+
+In all modes, if a query is active, it is AND-ed into the navigated search as `{filter} ({query})`.

@@ -22,7 +22,7 @@ from scryfall import DATA_DIR, MAX_AGE_DAYS, _age_days, data_ready, sync_bulk_da
 from deck_io import list_decks, load_deck, save_deck
 from models import MAYBEBOARD, CardEntry, CardRole, Deck, Group
 from partner import partner_mode, partner_filter
-from color_scout import ColorScoutScreen
+from histogram import HistogramScreen
 from search import MODE_COMMANDER, MODE_GROUP, MODE_PARTNER, SearchScreen, apply_routing_rules
 from similar import SimilarCardsScreen
 from settings import Settings
@@ -73,7 +73,7 @@ class MainScreen(Screen):
         Binding("ctrl+u", "import_deck", "Import"),
         Binding("+", "increment_card", "+1"),
         Binding("-", "decrement_card", "-1"),
-        Binding("x", "color_scout", "Color Scout"),
+        Binding("h", "histogram", "Histogram"),
         Binding("f", "find_similar", "Find similar"),
         Binding("question_mark", "open_settings", "Settings"),
     ]
@@ -563,12 +563,12 @@ class MainScreen(Screen):
             callback=on_done,
         )
 
-    def action_color_scout(self) -> None:
+    def action_histogram(self) -> None:
         def on_done(_) -> None:
             self._rebuild_tree()
             self.query_one(TopBar).refresh_display()
         self.app.push_screen(
-            ColorScoutScreen(self._db, self._deck, self._settings, self._filter_candidates),
+            HistogramScreen(self._db, self._deck, self._settings, self._filter_candidates),
             callback=on_done,
         )
 
